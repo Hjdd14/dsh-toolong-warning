@@ -1,0 +1,104 @@
+name: Bug report
+description: Something is wrong — a wrong count, a missing reminder, a false reminder, or a crash.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The fields below are the ones that make a bug
+        reproducible; the diagnostics route answers most of them in one command.
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: dsh version
+      description: "`dsh --version`, or the value in the plugin's `dsh.engines` line."
+      placeholder: "0.1.7-rc.1"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: The `version` field of the installed package.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it go wrong?
+      options:
+        - The floating window
+        - The Settings section
+        - The compaction count
+        - The warning itself (wrong, or missing, or too eager)
+        - Installation / loading
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: For a count or a threshold problem, say which numbers you expected and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics output
+      description: |
+        Paste the output of these two commands (they are loopback-only and read
+        nothing but this plugin's own state):
+        `curl.exe -s "http://127.0.0.1:3080/api/dsh-toolong-warning/health?selftest=1"`
+        `curl.exe -s "http://127.0.0.1:3080/api/dsh-toolong-warning/state?sessionId=<your session id>&debug=1"`
+        Please redact your session id if you prefer.
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: generation
+    attributes:
+      label: "`moduleGeneration` from the health route"
+      description: |
+        This tells us which code the running process is actually serving — host
+        changes only load in a new `dsh web` process, so a stale value is itself
+        the answer to many reports.
+      placeholder: "6"
+    validations:
+      required: false
+
+  - type: textarea
+    id: page-url
+    attributes:
+      label: The address the page was opened at
+      description: |
+        DSH fixes configuration writes to read-only on a non-loopback page, so
+        `http://localhost:3080` vs an IP or hostname changes what the Settings
+        section can do.
+      placeholder: "http://127.0.0.1:3080"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I ran `npm test` and it passed (or I am reporting a test failure)
+          required: false
+        - label: I read `verification.md` and this is not one of the listed unknowns
+          required: false

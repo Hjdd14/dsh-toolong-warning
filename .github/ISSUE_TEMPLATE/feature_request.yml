@@ -1,0 +1,50 @@
+name: Feature request
+description: A new capability, or a change to how the reminder decides.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This plugin's whole design goal is to stay silent unless it can justify
+        speaking from measured data, so requests that add a reason to warn are
+        weighed against false-positive risk.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change is it?
+      options:
+        - A new setting (a threshold, an interval, a toggle)
+        - A change to the warning rule
+        - A UI change (window, wording, placement, language)
+        - A new data source or diagnostic
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: false-positives
+    attributes:
+      label: Could this make the plugin warn when it should not?
+      description: |
+        If the change affects the decision, describe the conversations where it
+        would fire but should stay quiet. "None" is an acceptable answer if you
+        have thought about it.
+    validations:
+      required: true

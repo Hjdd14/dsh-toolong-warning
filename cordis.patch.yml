@@ -1,0 +1,23 @@
+# dsh-toolong-warning bundle patch: inserts the single host row that owns this
+# bundle. One row mounts BOTH halves: the host side (per-session compaction
+# fold, token-pressure lookups, the loopback-only state route) and the browser
+# side (the floating reminder + the settings section card), which the
+# `dsh-client-modules` node half discovers from this package's `dsh.client`
+# manifest field and serves from `client.js`.
+#
+# The `config` block below is the composition layer. The Settings page writes
+# user overrides for this row's volatile fields into the profile's own
+# cordis.patch.yml, so a matching override there replaces this whole config —
+# edit values through the Settings page, not here, once installed.
+- insert:
+    - id: toolong-warning
+      name: '@hjdd14/dsh-toolong-warning'
+      config:
+        enabled: true
+        compactCountMin: 3
+        occupancyPercentMin: 50
+        tokensSinceCompactionMin: 200000
+        statsIntervalMs: 15000
+        dismissible: true
+        historyReadTtlMs: 30000
+        historyReadTimeoutMs: 5000

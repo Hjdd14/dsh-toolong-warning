@@ -1,0 +1,79 @@
+{
+  "name": "@hjdd14/dsh-toolong-warning",
+  "version": "0.1.0",
+  "description": "DSH plugin: counts completed compactions per session and raises a floating reminder — with bilingual UI — only after repeated compactions plus heavy extra token spend.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "plugin",
+    "context-window",
+    "compaction",
+    "token-usage",
+    "web-ui"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "engines": {
+      "dsh": ">=0.1.7-rc.1"
+    }
+  },
+  "scripts": {
+    "test": "node scripts/test-detect.mjs && node scripts/test-i18n.mjs && node scripts/test-coldread.mjs && node scripts/test-routes.mjs && node scripts/check-client.mjs",
+    "test:detect": "node scripts/test-detect.mjs",
+    "test:i18n": "node scripts/test-i18n.mjs",
+    "test:coldread": "node scripts/test-coldread.mjs",
+    "test:routes": "node scripts/test-routes.mjs",
+    "check:bundle": "node scripts/check-client.mjs",
+    "check:hygiene": "node scripts/check-hygiene.mjs",
+    "check:release": "npm test && node scripts/check-hygiene.mjs",
+    "prepublishOnly": "npm run check:release"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.7-rc.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hjdd14/dsh-toolong-warning.git"
+  },
+  "homepage": "https://github.com/Hjdd14/dsh-toolong-warning#readme",
+  "bugs": {
+    "url": "https://github.com/Hjdd14/dsh-toolong-warning/issues"
+  },
+  "author": "Hjdd14",
+  "license": "MIT"
+}

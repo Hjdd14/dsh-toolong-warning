@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: How the warning is decided
+    url: https://github.com/Hjdd14/dsh-toolong-warning#when-does-it-warn
+    about: The exact rule, and the list of cases where it stays deliberately silent.
+  - name: What has and has not been verified
+    url: https://github.com/Hjdd14/dsh-toolong-warning/blob/main/verification.md
+    about: Read this before reporting behaviour that is already a known unknown.
+  - name: Diagnostics to paste into a report
+    url: https://github.com/Hjdd14/dsh-toolong-warning#diagnostics
+    about: The two loopback-only commands that answer most questions.

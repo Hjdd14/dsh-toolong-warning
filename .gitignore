@@ -1,0 +1,33 @@
+# Nothing here is generated: the plugin ships hand-written JS with no build step.
+
+# Local, editor and OS noise — never published.
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+*.tmp
+*.swp
+*~
+
+# Dependencies
+node_modules/
+
+# Local environment or credential files. This project ships none; the rule is
+# belt-and-braces so one can never be committed by accident.
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# Packaging leftovers
+*.tgz
+*.tar.gz
+
+# Backups made while working on a dsh profile
+*.profile-backup
+*.bak
+
+# Test and build scratch
+coverage/
+dist/
