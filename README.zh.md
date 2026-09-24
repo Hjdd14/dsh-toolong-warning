@@ -3,7 +3,6 @@
 [English](README.md) | **中文**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-374%20assertions-brightgreen.svg)](#测试)
 [![dsh](https://img.shields.io/badge/dsh-%3E%3D0.1.7--rc.1-6f42c1.svg)](#环境要求)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933.svg)](https://nodejs.org)
 
@@ -29,9 +28,6 @@
 - [工作原理](#工作原理)
 - [诊断接口](#诊断接口)
 - [环境要求](#环境要求)
-- [测试](#测试)
-- [隐私](#隐私)
-- [验证状态](#验证状态)
 - [许可](#许可)
 
 ## 你会看到什么
@@ -82,10 +78,8 @@
 | 完全拿不到用量数据（哪怕占用 95%） | 沉默 |
 | 该路由没声明上下文窗口，且额外消耗很低 | 沉默 |
 
-上面每一行都在 `scripts/test-detect.mjs` 里有断言；**该提醒**的行同样有断言 —— 漏报与误报两个方向都被钉住了。
-
-当前这段对话就是规则生效的现场例子：2100+ 事件、累计约 8700 万 token、占用已到约 60%，
-插件仍然什么都没说 —— 因为它**从未被压缩过**（`gate: "compactions"`）。
+一个现场例子：2100+ 事件、累计约 8700 万 token、占用已到约 60% 的会话，插件什么都没说 ——
+因为它**从未被压缩过**（`gate: "compactions"`）。
 
 ## 安装
 
@@ -259,50 +253,6 @@ dsh 只对客户端 bundle 热重载。这个版本号存在的意义，就是�
 | 界面 | `web` profile（其它界面下浏览器半是空操作） |
 | 可选 | `@deepseek-ai/dsh-session-query` —— 启用历史源。缺失时宿主没加载的会话就是测不了（等同旧行为） |
 | 宿主依赖 | `@deepseek-ai/schemastery` `~3.18.4`，设置表单需要。注意 profile 里可解析的裸包 `schemastery` 是 3.18.0，**没有** `.volatile()`，会让表单静默不可用 |
-
-## 测试
-
-374 条离线断言，不需要 harness、不需要网络：
-
-```powershell
-npm test
-```
-
-| 套件 | 断言数 | 覆盖内容 |
-|---|---|---|
-| `scripts/test-detect.mjs` | 98 | 判定规则本身：每个沉默场景与每个提醒场景、折叠语义、配置解析 |
-| `scripts/test-i18n.mjs` | 58 | 双语字典一致性，**以及模块与内联产物副本**的一致性、占位替换、回退、初值解析、语言存储 |
-| `scripts/test-coldread.mjs` | 49 | 历史折叠、缓存/重校验/TTL、fresh 读绕过缓存、超时与失败降级、与 live 折叠的一致性 |
-| `scripts/test-routes.mjs` | 98 | 路由组装、回环围栏、自检、阈值覆盖、历史分支，以及"重复投递的压缩事件绝不被计两次" |
-| `scripts/check-client.mjs` | 71 | 产物结构、schema 形状、挂载、以及真正 import 并运行 `client.js` |
-
-```powershell
-npm run check:hygiene   # 仓库隐私闸门：不含个人路径、会话 id、凭据
-npm run check:release   # npm test + check:hygiene
-```
-
-`verification.md` 记录了验了什么、怎么验的，以及同样重要的 —— **哪些没验**。
-
-## 隐私
-
-这个仓库是按"可以安全公开"设计的：
-
-- 不含个人路径、用户名、会话 id 或凭据。这是**被强制检查**的，不是承诺：
-  `npm run check:hygiene` 会扫描每个文件，命中即失败。
-- 插件从不读取私有存储路径；历史读取走官方支持的 `sessionQuery` 服务。
-- 诊断路由仅限回环，且不返回任何消息内容 —— 需显式请求的 `debug` 只报告事件**类型**与压缩生命周期。
-- 没有构建脚本、没有遥测，除上述同源路由外没有任何网络调用。
-
-## 验证状态
-
-`verification.md` 记录了验了什么、怎么验的、以及哪些没验。要点：
-
-- 判定规则**双向覆盖** —— 每个必须保持沉默的场景与每个必须提醒的场景都有断言，另有运行中自检
-  在真实进程里驱动真实路由。
-- live 折叠与 history 折叠的计数由同一个自检在真实会话上互相比对。
-- 悬浮窗的渲染有结构化断言；它的**外观**由截图目视确认，而非自动化视觉检查。
-- 设置**表单在非回环页面上是只读的**，这是 DSH 的设计。浏览器本地阈值覆盖是为了让这个限制可用，
-  它不能替代写入 profile。
 
 ## 许可
 

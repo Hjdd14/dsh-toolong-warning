@@ -3,7 +3,6 @@
 **English** | [中文](README.zh.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-374%20assertions-brightgreen.svg)](#tests)
 [![dsh](https://img.shields.io/badge/dsh-%3E%3D0.1.7--rc.1-6f42c1.svg)](#requirements)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933.svg)](https://nodejs.org)
 
@@ -30,9 +29,6 @@ conversation has since burned **a lot of extra tokens**.
 - [How it works](#how-it-works)
 - [Diagnostics](#diagnostics)
 - [Requirements](#requirements)
-- [Tests](#tests)
-- [Privacy](#privacy)
-- [Verification status](#verification-status)
 - [License](#license)
 
 ## What you see
@@ -89,17 +85,15 @@ All three conditions must hold. If any input is missing, the plugin stays silent
 | No usage data at all (even at 95% occupancy) | silent |
 | The route declares no context window and the extra spend is low | silent |
 
-Every one of those rows is asserted in `scripts/test-detect.mjs`, together with the rows that *must*
-warn — the false-negative and false-positive directions are both pinned. A documented example: a
-session with 2,100+ events, ~87M tokens spent and ~60% occupancy reported no warning at all, because
-it had never been compacted (`gate: "compactions"`).
+A documented example: a session with 2,100+ events, ~87M tokens spent and ~60% occupancy reported no
+warning at all, because it had never been compacted (`gate: "compactions"`).
 
 ## Install
 
 ### Requirements
 
 - dsh `>= 0.1.7-rc.1` (`@deepseek-ai/dsh`)
-- Node `>= 22.19` (the test suites use modern built-ins)
+- Node `>= 22.19`
 - The `web` profile (this plugin has a browser half; it is a no-op on other surfaces)
 
 ### 1. From npm
@@ -281,51 +275,6 @@ which code it is serving, rather than that being a matter of inference.
 | Surface | the `web` profile (the browser half is a no-op elsewhere) |
 | Optional | `@deepseek-ai/dsh-session-query` — enables the history source. Without it, sessions the host has not loaded simply stay unmeasured |
 | Host dependency | `@deepseek-ai/schemastery` `~3.18.4` for the Settings form. The bare `schemastery` reachable from a profile is 3.18.0 and has **no** `.volatile()`, which silently makes the form unavailable |
-
-## Tests
-
-374 offline assertions, no harness and no network required:
-
-```powershell
-npm test
-```
-
-| Suite | Assertions | Covers |
-|---|---|---|
-| `scripts/test-detect.mjs` | 98 | The rule itself: every silent case and every warning case, the fold, config resolution |
-| `scripts/test-i18n.mjs` | 58 | Dictionary parity between the two languages **and** between the module and the inlined bundle copy, placeholder substitution, fallback, initial-language resolution, the language store |
-| `scripts/test-coldread.mjs` | 49 | The history fold, cache/revalidate/TTL, a fresh read bypassing the cache, timeout and failure degradation, agreement with the live fold |
-| `scripts/test-routes.mjs` | 98 | Route assembly, the loopback fence, the self-test, threshold overrides, the history branch, and that a redelivered compaction event is never counted twice |
-| `scripts/check-client.mjs` | 71 | Bundle structure, schema shape, plugin mounting, and really importing and running `client.js` |
-
-```powershell
-npm run check:hygiene   # repository privacy gate: no personal paths, session ids, or credentials
-npm run check:release   # npm test + check:hygiene
-```
-
-## Privacy
-
-- No personal paths, usernames, session ids, or credentials. Enforced, not promised:
-  `npm run check:hygiene` scans every file and fails on a match.
-- The plugin never reads private storage paths. History reads go through the supported `sessionQuery`
-  service.
-- The diagnostics routes are loopback-only and return no message content — the opt-in `debug` facet
-  reports event *types* and the compaction lifecycle, not text.
-- There are no build scripts, no telemetry, and no network calls beyond the same-origin routes above.
-
-## Verification status
-
-`verification.md` records what was verified, how, and what was not. In short:
-
-- The decision rule is covered in both directions — every case that must stay silent and every case
-  that must warn — plus a live self-test that drives the real routes inside the running process.
-- Counts from the live fold and from the history fold are compared against each other on real
-  sessions by that same self-test.
-- The window's rendering is asserted structurally; its **appearance** has been confirmed visually by a
-  screenshot rather than an automated visual check.
-- The **settings form is read-only on a non-loopback page** by DSH's design. The browser-local
-  threshold override exists to make that limitation livable; it is not a substitute for writing to the
-  profile.
 
 ## License
 
