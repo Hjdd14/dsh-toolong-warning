@@ -60,6 +60,10 @@ to its own fixed container, so it never competes with another plugin for a slot:
 - The counter is **always** shown; the warning card appears only when the rule is met.
 - **Got it** hides the current reminder only — the counter keeps updating.
 - **Adjust thresholds** jumps to this plugin's section on the Settings page.
+- The window is **draggable**: press anywhere on the card and move it, so it does not have to sit over
+  the page's own top-right controls. Where you leave it is remembered in this browser, it is kept
+  inside the viewport (and pulled back after a resize), and the Settings section offers a
+  **reset** row once it has been moved.
 - Nothing is shown when the plugin is disabled or no conversation is open.
 - The whole UI is **bilingual** (中文 / English), switchable from the plugin's own settings section —
   see [Settings](#settings).
@@ -183,6 +187,14 @@ A `中文 / English` selector in the same section. The choice is stored in the b
 floating window and the settings section immediately (no reload), and is also pushed to the harness'
 shared locale service when that service is writable — so on most deployments the rest of the UI
 follows too. The global language control DSH itself ships lives in **Settings → General**.
+
+### Window position
+
+Drag the floating window anywhere; the position is stored in this browser, next to the language
+choice and the threshold override, and is deliberately **not** a profile setting — it describes one
+person's screen, not the conversation. It stays inside the viewport (a moved window is pulled back
+after a resize or when the warning card makes it taller), and a **Reset window position** row appears
+in this section as soon as the window has been moved.
 
 ### Two scopes of edit — and why
 

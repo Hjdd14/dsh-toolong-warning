@@ -23,11 +23,17 @@ import {
   LANGUAGES,
   LANGUAGE_LABELS,
   MESSAGES,
+  POSITION_KEY,
+  clampPosition,
   createLanguageStore,
+  createPositionStore,
   messageKeys,
   normalizeLanguage,
+  parsePosition,
+  readStoredPosition,
   resolveInitialLanguage,
   t,
+  writeStoredPosition,
 } from '../src/i18n.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -219,6 +225,88 @@ section('language choice and the threshold override stay independent')
 }
 
 // ---------------------------------------------------------------------------
+section('the floating window can be moved, and stays reachable')
+// ---------------------------------------------------------------------------
+{
+  // Parsing: anything that is not a pair of finite numbers means "not moved yet",
+  // so a corrupted entry falls back to the default corner instead of throwing or
+  // teleporting the window to NaN.
+  check('a stored position parses', parsePosition('{"x":10,"y":20}'), { x: 10, y: 20 })
+  check('an object parses too', parsePosition({ x: -4, y: 7.5 }), { x: -4, y: 7.5 })
+  check('null is not a position', parsePosition(null), undefined)
+  check('an array is not a position', parsePosition([1, 2]), undefined)
+  check('a number is not a position', parsePosition(42), undefined)
+  check('invalid JSON is not a position', parsePosition('{oops'), undefined)
+  check('a missing half is not a position', parsePosition({ x: 1 }), undefined)
+  check('a string coordinate is not a position', parsePosition({ x: '1', y: 2 }), undefined)
+  check('NaN is not a position', parsePosition({ x: Number.NaN, y: 1 }), undefined)
+  check('Infinity is not a position', parsePosition({ x: 1, y: Number.POSITIVE_INFINITY }), undefined)
+
+  // Clamping: the window must never be dragged out of reach.
+  const viewport = { width: 1000, height: 800 }
+  const size = { width: 300, height: 200 }
+  check('a position inside the viewport is left alone', clampPosition({ x: 100, y: 100 }, viewport, size), { x: 100, y: 100 })
+  check('a position past the right/bottom edge is pulled back',
+    clampPosition({ x: 9999, y: 9999 }, viewport, size), { x: 968, y: 768 })
+  check('a position past the left/top still keeps the window grabbable',
+    clampPosition({ x: -9999, y: -9999 }, viewport, size), { x: -276, y: 0 })
+  check('an exactly-placed window is untouched',
+    clampPosition({ x: 968, y: 768 }, viewport, size), { x: 968, y: 768 })
+  // A window wider than the viewport must still slide left, or its right-hand
+  // content could never be reached.
+  check('a narrow viewport allows a negative x',
+    clampPosition({ x: 50, y: 10 }, { width: 80, height: 200 }, size), { x: 48, y: 10 })
+  check('a missing viewport does not throw', clampPosition({ x: 50, y: 10 }, {}, size), { x: 50, y: 10 })
+  check('missing dimensions do not throw', clampPosition({ x: 5, y: 5 }, viewport, {}), { x: 5, y: 5 })
+  check('a non-finite position is treated as the origin',
+    clampPosition({ x: Number.NaN, y: Number.NaN }, viewport, size), { x: 0, y: 0 })
+
+  // Storage: unreadable storage means "never moved", never an exception.
+  const storage = memoryStorage()
+  check('nothing stored reads as undefined', readStoredPosition(storage), undefined)
+  check('writing reports success', writeStoredPosition(storage, { x: 3, y: 4 }), true)
+  check('and reads back', readStoredPosition(storage), { x: 3, y: 4 })
+  check('clearing removes the entry', writeStoredPosition(storage, undefined), true)
+  check('and reads as undefined again', readStoredPosition(storage), undefined)
+  const hostileStorage = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') }, removeItem: () => { throw new Error('denied') } }
+  check('a refusing storage reads as undefined', readStoredPosition(hostileStorage), undefined)
+  check('and a refused write reports false', writeStoredPosition(hostileStorage, { x: 1, y: 2 }), false)
+
+  // The store: one value, two halves, and a reset that returns the window home.
+  const storeStorage = memoryStorage()
+  const store = createPositionStore({ storage: storeStorage })
+  check('a fresh store has no position', store.get(), undefined)
+  check('and says so', store.has(), false)
+  let notified = 0
+  store.subscribe(() => { notified += 1 })
+  check('storing a position succeeds', store.set({ x: 12.5, y: 40 }), true)
+  check('the window moved', store.get(), { x: 12.5, y: 40 })
+  check('and it is reported as moved', store.has(), true)
+  check('subscribers were told once', notified, 1)
+  check('the choice was persisted', storeStorage.getItem(POSITION_KEY), '{"x":12.5,"y":40}')
+  check('a remount picks it up', createPositionStore({ storage: storeStorage }).get(), { x: 12.5, y: 40 })
+  check('a junk position is refused', store.set({ x: 'nope', y: 0 }), false)
+  check('and the good value survives', store.get(), { x: 12.5, y: 40 })
+  check('reset clears it', store.reset(), true)
+  check('the window is home again', store.get(), undefined)
+  check('the stored entry is gone', storeStorage.getItem(POSITION_KEY), null)
+  check('reset notified as well', notified, 2)
+
+  // Storage that refuses must not stop the window from moving this session.
+  const hostileStore = createPositionStore({ storage: hostileStorage })
+  check('a refused store reports false', hostileStore.set({ x: 5, y: 6 }), false)
+  check('but still moves in memory', hostileStore.get(), { x: 5, y: 6 })
+
+  // Position lives in its own key, so moving the window touches nothing else.
+  const shared = memoryStorage()
+  createPositionStore({ storage: shared }).set({ x: 1, y: 2 })
+  check('the position key is its own', POSITION_KEY, 'dsh-toolong-warning.position.v1')
+  check('and does not disturb the threshold override',
+    (() => { shared.setItem('dsh-toolong-warning.thresholds.v1', '{"compactCountMin":1}'); createPositionStore({ storage: shared }).reset(); return shared.getItem('dsh-toolong-warning.thresholds.v1') })(),
+    '{"compactCountMin":1}')
+}
+
+// ---------------------------------------------------------------------------
 section('the inlined bundle dictionary matches src/i18n.js exactly')
 // ---------------------------------------------------------------------------
 {
@@ -291,6 +379,62 @@ section('the inlined bundle dictionary matches src/i18n.js exactly')
   // served: the plugin route answers only the exact combo URL it composed.
   check('the bundle makes no sibling import', /import\s*\(\s*['"][^'"]*src\//.test(source), false)
   check('the bundle declares no runtime import of the dictionary', source.includes("import('./src/i18n.js')"), false)
+
+  // -------------------------------------------------------------------------
+  // The position helpers are duplicated for the same reason, and a drifted copy
+  // would show up only as a window that cannot be moved back into view. Compare
+  // each function's source text, ignoring indentation.
+  // -------------------------------------------------------------------------
+  const squash = (text) => text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .join('\n')
+
+  /** Pull one function declaration out of a source file, by name. */
+  const extractFunction = (text, name) => {
+    const start = text.indexOf(`function ${name}(`)
+    if (start === -1) return undefined
+    // Walk braces from the declaration's opening brace to its match, ignoring
+    // braces inside strings and comments is unnecessary here: these bodies have
+    // none.
+    const open = text.indexOf('{', start)
+    let depth = 0
+    for (let index = open; index < text.length; index += 1) {
+      if (text[index] === '{') depth += 1
+      else if (text[index] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(start, index + 1)
+      }
+    }
+    return undefined
+  }
+
+  const moduleSource = await readFile(join(ROOT, 'src', 'i18n.js'), 'utf8')
+  const duplicated = [
+    'parsePosition',
+    'safeJson',
+    'clampPosition',
+    'readStoredPosition',
+    'writeStoredPosition',
+    'createPositionStore',
+  ]
+  const missing = []
+  const driftedFunctions = []
+  for (const name of duplicated) {
+    const inModule = extractFunction(moduleSource, name)
+    const inBundle = extractFunction(source, name)
+    if (inModule === undefined || inBundle === undefined) missing.push(name)
+    else if (squash(inModule) !== squash(inBundle)) driftedFunctions.push(name)
+  }
+  check('every position helper exists in both copies', missing, [])
+  check('no position helper drifted between the two copies', driftedFunctions, [])
+
+  // The two constants the helpers read must agree as well.
+  const constant = (text, name) => new RegExp(`const ${name} = ([^\\n]+)`).exec(text)?.[1]?.trim()
+  const constantsDrifted = ['POSITION_KEY', 'POSITION_MARGIN', 'POSITION_MIN_VISIBLE']
+    .filter((name) => constant(moduleSource, name) !== constant(source, name))
+  check('the position constants agree between the two copies', constantsDrifted, [])
 }
 
 // ---------------------------------------------------------------------------

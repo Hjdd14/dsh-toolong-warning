@@ -17,7 +17,7 @@
 
 ---
 
-## 1. 离线验证：374 项全部通过（可复现）
+## 1. 离线验证：440 项全部通过（可复现）
 
 ```
 node scripts/test-detect.mjs    ->  98 passed, 0 failed   判定规则、折叠语义、配置解析
@@ -390,12 +390,46 @@ ok   and is the version the Config needs
 并按文档要求**同步改了客户端模块 id 与 cordis patch 行名**（三者必须一致，否则浏览器半静默不加载）。
 改名后逐项复验：
 
-- 374 条断言全过（`check-client.mjs` 现在会**断言这三处标识一致**，只改一部分会直接失败）。
+- 440 条断言全过（`check-client.mjs` 现在会**断言这三处标识一致**，只改一部分会直接失败）。
 - 隐私闸门 clean。
 - 本机 profile 的 `dependencies`/`bundles` 同步改名并 `pnpm install`（`pnpm-lock.yaml` 一起更新），
   重启后 `moduleGeneration: 10`，两个自检 `pass:true`，`liveCount 1 = historyCount 1`，
   真实会话 `count: 1` 与日志中唯一一组压缩生命周期自洽。
 - **设置命名空间 `toolong-warning` 与包名解绑**，所以改名没有重置任何设置。
+
+### 5.7 悬浮窗可拖动（本轮新增）
+
+**改动范围**：只在浏览器半（`client.js` 与 `src/i18n.js`），宿主侧未改一行 —— 因此**不需要重启 `dsh web`**，
+`moduleGeneration` 仍是 10，bundle 热重载即可生效。
+
+**验证方式与结论**
+
+- **位置数学单独可测**，所以放在 `src/i18n.js` 并被 `client.js` 逐字节复制。`scripts/test-i18n.mjs`
+  新增一节（约 40 条）覆盖：
+  - `parsePosition`：合法对象/JSON 通过；`null`、数组、数字、非法 JSON、缺一半、字符串坐标、`NaN`、
+    `Infinity` 一律 `undefined`（即"从未移动过"，回退右上角默认位置，不会把窗口放到 NaN）。
+  - `clampPosition`：视口内不动；拖过右/下边界被拉回；拖过左/上边界仍保留可抓取区域；
+    **视口比窗口窄时允许负坐标**（否则窗口右侧内容永远够不到）；视口或尺寸缺失不抛错、不做无意义移动
+    （这条是实测发现并修正的：未测量窗口时会因为"保留 24px"规则把 x 从 5 改成 24）。
+  - `createPositionStore`：持久化、可读回、`reset` 清键并通知、写失败时内存值仍更新、
+    位置键与阈值/语言键互不干扰。
+- **副本一致性**：`test-i18n.mjs` 新增断言，逐个比对 `parsePosition`/`safeJson`/`clampPosition`/
+  `readStoredPosition`/`writeStoredPosition`/`createPositionStore` 两份源码（忽略缩进）以及
+  `POSITION_KEY`/`POSITION_MARGIN`/`POSITION_MIN_VISIBLE` 三个常量。
+  **反向验证过它真的会拦**：把 bundle 里 `clampPosition` 的返回改成 `{ x, y }` 后测试立刻失败并点名
+  `no position helper drifted between the two copies`，撤销后恢复通过。
+- **产物层面**（`check-client.mjs` 新增 18 条）：样式含 `cursor:grab`/`grabbing`/`user-select:none`；
+  两个状态的容器都挂了 `onPointerDown/Move/Up/Cancel`；`closest(INTERACTIVE_SELECTOR)` 守卫存在
+  （点在按钮/输入框上不会变成拖动）；位置持久化、复位、`resize` 与 `ResizeObserver` 重新夹取都在产物里。
+- **总数**：`npm test` 从 374 条增至 **440 条**（`test-i18n` 58→104，`check-client` 74→91），
+  隐私闸门 clean (27 files)。
+- **运行中**：`?selftest=1` 两项自检仍 `pass:true`，`ok:true`，`generation 10` 未变。
+
+**未验证（只能由你眼睛确认）**
+
+- 拖动**手感**与光标形态、以及"刷新页面后位置仍在"、"设置页复位按钮把窗口送回右上角"这三件事，
+  我无法替你验证：拖动本质是鼠标交互。我能证明的是数学边界、持久化、产物内容与副本一致，
+  不能证明你屏幕上那一次拖动的观感。
 
 ---
 

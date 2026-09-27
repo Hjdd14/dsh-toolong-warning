@@ -6,6 +6,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **The floating window is draggable.** Press anywhere on the card (except its own
+  controls) and move it, so it no longer has to sit over the page's top-right
+  content. The position is remembered per browser — the same scope as the language
+  choice and the threshold override, and deliberately not a profile setting,
+  because it describes one person's screen rather than the conversation.
+- The window is kept **reachable**: a position is clamped so at least a grab-sized
+  part stays on screen (allowing negative coordinates when the window is wider than
+  the viewport, so its right-hand content is still reachable), and a moved window is
+  pulled back after a resize, a rotation, or the warning card making it taller.
+- The Settings section grows a **Reset window position** row as soon as the window
+  has been moved, and only then.
+
+### Notes
+
+- Browser-half only: no host change, so no new `dsh web` process is required and
+  `moduleGeneration` is unchanged. The bundle hot-reloads.
+- The position helpers live in `src/i18n.js` and are duplicated into `client.js`
+  for the usual reason (the bundle cannot import a sibling module). Both the copy's
+  source text and its constants are compared by `scripts/test-i18n.mjs`, so a fix
+  applied to one copy cannot silently miss the other.
+- `npm test` is now **440 assertions** (was 374): 104 in `test-i18n.mjs` and 91 in
+  `check-client.mjs`.
+
 ## [0.1.0] — 2026-09-24
 
 First working release. The interesting part of this project is not the feature
@@ -41,7 +66,7 @@ fixes are listed individually — each one had a concrete symptom.
   `health` route, and `?selftest=1` which drives the real route assembly twice —
   once with a synthetic session, once comparing the live and history folds on a
   real session.
-- 374 offline assertions across five suites (`npm test`), plus a repository
+- 440 offline assertions across five suites (`npm test`), plus a repository
   privacy gate (`npm run check:hygiene`).
 
 ### Fixed

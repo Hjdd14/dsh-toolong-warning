@@ -113,6 +113,40 @@ section('client.js: module-loader envelope')
   check('does not touch another plugin\'s DOM markers', /data-dsh-(pet|usage|task-board|git-graph|skill)/.test(client), false)
 }
 
+section('client.js: the window is draggable')
+{
+  const client = await readFile(join(ROOT, 'client.js'), 'utf8')
+
+  // The stylesheet has to advertise the interaction, or nobody discovers it.
+  check('the card shows a grab cursor', client.includes('cursor:grab'), true)
+  check('and a grabbing cursor while dragging', client.includes('cursor:grabbing'), true)
+  check('dragging suppresses text selection', client.includes('user-select:none'), true)
+  check('the moved window still lets clicks through', /\.dsh-tlw-overlay\{[^}]*pointer-events:none/.test(client), true)
+  check('controls inside the card keep their own cursor', /\.dsh-tlw-card (button|input)/.test(client), true)
+
+  // The container must carry the whole pointer sequence, on both the collapsed and
+  // the expanded branch (they share the class but are separate elements).
+  const containers = [...client.matchAll(/className: 'dsh-tlw-overlay'/g)].length
+  check('both window states render an overlay container', containers, 2)
+  const handlerCount = (name) => [...client.matchAll(new RegExp(`(^|\\s)${name},`, 'gm'))].length
+  for (const handler of ['onPointerDown', 'onPointerMove', 'onPointerUp', 'onPointerCancel']) {
+    check(`the container handles ${handler}`, handlerCount(handler) >= 2, true)
+  }
+
+  // A press that starts on a control must not become a drag, or every button and
+  // number field inside the card would stop working.
+  check('a control press is excluded from dragging', client.includes('closest(INTERACTIVE_SELECTOR)'), true)
+  check('the exclusion covers buttons and form controls',
+    client.includes("button, a, input, select, textarea"), true)
+
+  // Position is remembered, and reset only clears that one key.
+  check('the position is persisted', client.includes('dsh-toolong-warning.position.v1'), true)
+  check('the settings card can send the window home', client.includes('positionStore.reset()'), true)
+  check('and only offers it once the window has moved', client.includes('React.useSyncExternalStore(positionStore.subscribe, positionStore.has)'), true)
+  check('resizing re-clamps a moved window', client.includes("addEventListener('resize'"), true)
+  check('a growing window re-clamps too', client.includes('new ResizeObserver('), true)
+}
+
 section('index.js: host half exports')
 {
   const mod = await import(pathToFileURL(join(ROOT, 'index.js')).href)
@@ -301,6 +335,10 @@ section('client.js: the bundle actually runs')
     useEffect: () => {},
     useCallback: (fn) => fn,
     useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+    // The window keeps its drag state in refs and forces a repaint while dragging,
+    // so both exist here as inert doubles.
+    useRef: (initial) => ({ current: initial }),
+    useReducer: (reducer, initial) => [initial, () => {}],
   }
   fakeReact.default = fakeReact
   const fakeReactDom = { createRoot: () => ({ render: () => {}, unmount: () => {} }) }

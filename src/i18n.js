@@ -50,6 +50,8 @@ export const MESSAGES = Object.freeze({
     'overlay.collapse': '收起',
     'overlay.collapseAria': '收起长对话提醒',
     'overlay.expand': '展开',
+    'overlay.dragHint': '可拖动移动',
+    'overlay.dragAria': '按住可拖动悬浮窗',
 
     'warn.title': '⚠ 本次对话过长，建议新开一个对话',
     'warn.reasonOccupancy': '上下文占用已达 {occupancy}',
@@ -74,6 +76,8 @@ export const MESSAGES = Object.freeze({
     'settings.intro': '只有在真的不划算时才提醒：必须先成功压缩够多次，并且此后确实又消耗了大量 token；任何一项数据缺失都不会提醒，以免误报。',
     'settings.language': '语言 / Language',
     'settings.languageHint': '切换后本插件的悬浮窗与设置页立即跟随；选择保存在本浏览器。',
+    'settings.resetPosition': '复位悬浮窗位置',
+    'settings.resetPositionHint': '把悬浮窗移回右上角默认位置（位置只保存在本浏览器）。',
     'settings.writeModeProfile': '数值修改后写入本 profile 的配置并立即生效（对所有会话生效）。',
     'settings.writeModeLocal': '当前页面不是通过回环地址打开的，DSH 因此把配置写入固定为只读（对任何插件的表单都一样）。下面三个阈值仍可修改，但只保存在本浏览器并对本页生效{countHint}；要让所有会话生效，请改用 http://127.0.0.1:3080 或 http://localhost:3080 打开页面。',
     'settings.localCountHint': '（已设置 {count} 项）',
@@ -130,6 +134,8 @@ export const MESSAGES = Object.freeze({
     'overlay.collapse': 'Collapse',
     'overlay.collapseAria': 'Collapse the long-conversation reminder',
     'overlay.expand': 'Expand',
+    'overlay.dragHint': 'Drag to move',
+    'overlay.dragAria': 'Press and drag to move this window',
 
     'warn.title': '⚠ This conversation is getting long — consider starting a new one',
     'warn.reasonOccupancy': 'context occupancy has reached {occupancy}',
@@ -154,6 +160,8 @@ export const MESSAGES = Object.freeze({
     'settings.intro': 'It only speaks up when the conversation is genuinely not worth continuing: enough completed compactions, and a real amount of tokens spent since the last one. If any input is missing it stays silent rather than guessing.',
     'settings.language': '语言 / Language',
     'settings.languageHint': 'Switches this plugin\'s floating window and settings immediately; the choice is stored in this browser.',
+    'settings.resetPosition': 'Reset window position',
+    'settings.resetPositionHint': 'Move the floating window back to its default top-right position (stored in this browser only).',
     'settings.writeModeProfile': 'Edited values are written to this profile\'s configuration and take effect at once (for every session).',
     'settings.writeModeLocal': 'This page was not opened over a loopback address, so DSH fixes configuration writes to read-only (true for every plugin\'s form). The three thresholds below are still editable, but are stored in this browser and apply to this page only{countHint}; to apply them everywhere, open the page at http://127.0.0.1:3080 or http://localhost:3080.',
     'settings.localCountHint': ' ({count} set)',
@@ -345,5 +353,145 @@ export function createLanguageStore(options) {
       return stored
     },
     available: () => LANGUAGES,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Floating-window position
+//
+// The window used to be pinned to the top-right corner, where it can cover the
+// page's own controls there. It is draggable now, and where it was left is
+// remembered per browser — the same scope as the threshold override and the
+// language choice, because DSH fixes settings writes to read-only on a
+// non-loopback page and a Host-backed preference could not be saved there.
+//
+// The bundle carries a byte-identical copy of these helpers (it cannot import a
+// sibling module — see the note at the top of `client.js`), and
+// `scripts/test-i18n.mjs` asserts the two copies match.
+// ---------------------------------------------------------------------------
+
+/** Where the floating window's position is stored. */
+export const POSITION_KEY = 'dsh-toolong-warning.position.v1'
+
+/** Gap kept from the viewport edges, in pixels. */
+export const POSITION_MARGIN = 8
+
+/** How much of the window must stay visible when it is dragged to an edge. */
+export const POSITION_MIN_VISIBLE = 24
+
+/** Parse a stored position. Anything malformed yields undefined ("not moved yet"). */
+export function parsePosition(raw) {
+  const value = typeof raw === 'string' ? safeJson(raw) : raw
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const x = value.x
+  const y = value.y
+  if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
+  if (typeof y !== 'number' || !Number.isFinite(y)) return undefined
+  return { x, y }
+}
+
+/** JSON.parse that returns undefined instead of throwing. */
+function safeJson(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Keep a position within reach: never past the margin on the right/bottom, and
+ * never so far off the left/top that less than `minVisible` pixels remain.
+ *
+ * The left/top bound is deliberately negative-allowing: when the window is wider
+ * than the viewport, letting it slide left is what makes its right-hand content
+ * reachable, whereas clamping at 0 would strand it.
+ * @param position - `{ x, y }` in viewport coordinates.
+ * @param viewport - `{ width, height }` of the visual viewport.
+ * @param size - `{ width, height }` of the window itself.
+ * @param margin - gap kept from the right/bottom edges.
+ * @param minVisible - pixels of the window that must remain on screen.
+ * @returns a clamped `{ x, y }`.
+ */
+export function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE) {
+  const x = Number.isFinite(position?.x) ? position.x : 0
+  const y = Number.isFinite(position?.y) ? position.y : 0
+  const viewWidth = Number.isFinite(viewport?.width) ? viewport.width : undefined
+  const viewHeight = Number.isFinite(viewport?.height) ? viewport.height : undefined
+  const ownWidth = Number.isFinite(size?.width) ? size.width : 0
+  const ownHeight = Number.isFinite(size?.height) ? size.height : 0
+  const minX = -(ownWidth - minVisible)
+  const maxX = viewWidth === undefined ? x : Math.max(minX, viewWidth - minVisible - margin)
+  const maxY = viewHeight === undefined ? y : Math.max(0, viewHeight - minVisible - margin)
+  // An unmeasured window (no size at all) cannot be reasoned about: the
+  // "keep `minVisible` pixels on screen" rule would snap a zero-width window to
+  // exactly `minVisible`, moving it for no reason. Leave it where it is.
+  if (viewWidth === undefined || viewHeight === undefined || ownWidth <= 0 || ownHeight <= 0) return { x, y }
+  return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, 0), maxY) }
+}
+
+/** Read the stored position, treating an unusable storage as "not moved yet". */
+export function readStoredPosition(storage) {
+  try {
+    return parsePosition(storage?.getItem(POSITION_KEY) ?? undefined)
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist the position; `undefined` clears it. False when it cannot be stored. */
+export function writeStoredPosition(storage, position) {
+  try {
+    if (position === undefined) storage?.removeItem(POSITION_KEY)
+    else storage?.setItem(POSITION_KEY, JSON.stringify({ x: position.x, y: position.y }))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One shared position value, so the window and the settings card agree.
+ * @param options - a storage object (defaults to `window.localStorage`).
+ * @returns `{ get, subscribe, set, reset, has }`.
+ */
+export function createPositionStore(options) {
+  const storage = options?.storage ?? (typeof window === 'undefined' ? undefined : window.localStorage)
+  let value = readStoredPosition(storage)
+  const listeners = new Set()
+  /** Tell every listener, surviving one that throws. */
+  const notify = () => {
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      } catch {
+        // One failing listener must not stop the others.
+      }
+    }
+  }
+  return {
+    get: () => value,
+    /** Whether a position has been stored (drives the settings reset row). */
+    has: () => value !== undefined,
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    /** Store a position; the in-memory value moves even when storage refuses. */
+    set(next) {
+      const parsed = parsePosition(next)
+      if (parsed === undefined) return false
+      const stored = writeStoredPosition(storage, parsed)
+      value = parsed
+      notify()
+      return stored
+    },
+    /** Forget the position, returning the window to its default corner. */
+    reset() {
+      const stored = writeStoredPosition(storage, undefined)
+      value = undefined
+      notify()
+      return stored
+    },
   }
 }

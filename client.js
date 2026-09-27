@@ -64,6 +64,8 @@ window.__ModuleLoader__.load({
         'overlay.collapse': '收起',
         'overlay.collapseAria': '收起长对话提醒',
         'overlay.expand': '展开',
+        'overlay.dragHint': '可拖动移动',
+        'overlay.dragAria': '按住可拖动悬浮窗',
 
         'warn.title': '⚠ 本次对话过长，建议新开一个对话',
         'warn.reasonOccupancy': '上下文占用已达 {occupancy}',
@@ -88,6 +90,8 @@ window.__ModuleLoader__.load({
         'settings.intro': '只有在真的不划算时才提醒：必须先成功压缩够多次，并且此后确实又消耗了大量 token；任何一项数据缺失都不会提醒，以免误报。',
         'settings.language': '语言 / Language',
         'settings.languageHint': '切换后本插件的悬浮窗与设置页立即跟随；选择保存在本浏览器。',
+        'settings.resetPosition': '复位悬浮窗位置',
+        'settings.resetPositionHint': '把悬浮窗移回右上角默认位置（位置只保存在本浏览器）。',
         'settings.writeModeProfile': '数值修改后写入本 profile 的配置并立即生效（对所有会话生效）。',
         'settings.writeModeLocal': '当前页面不是通过回环地址打开的，DSH 因此把配置写入固定为只读（对任何插件的表单都一样）。下面三个阈值仍可修改，但只保存在本浏览器并对本页生效{countHint}；要让所有会话生效，请改用 http://127.0.0.1:3080 或 http://localhost:3080 打开页面。',
         'settings.localCountHint': '（已设置 {count} 项）',
@@ -144,6 +148,8 @@ window.__ModuleLoader__.load({
         'overlay.collapse': 'Collapse',
         'overlay.collapseAria': 'Collapse the long-conversation reminder',
         'overlay.expand': 'Expand',
+        'overlay.dragHint': 'Drag to move',
+        'overlay.dragAria': 'Press and drag to move this window',
 
         'warn.title': '⚠ This conversation is getting long — consider starting a new one',
         'warn.reasonOccupancy': 'context occupancy has reached {occupancy}',
@@ -168,6 +174,8 @@ window.__ModuleLoader__.load({
         'settings.intro': 'It only speaks up when the conversation is genuinely not worth continuing: enough completed compactions, and a real amount of tokens spent since the last one. If any input is missing it stays silent rather than guessing.',
         'settings.language': '语言 / Language',
         'settings.languageHint': 'Switches this plugin\'s floating window and settings immediately; the choice is stored in this browser.',
+        'settings.resetPosition': 'Reset window position',
+        'settings.resetPositionHint': 'Move the floating window back to its default top-right position (stored in this browser only).',
         'settings.writeModeProfile': 'Edited values are written to this profile\'s configuration and take effect at once (for every session).',
         'settings.writeModeLocal': 'This page was not opened over a loopback address, so DSH fixes configuration writes to read-only (true for every plugin\'s form). The three thresholds below are still editable, but are stored in this browser and apply to this page only{countHint}; to apply them everywhere, open the page at http://127.0.0.1:3080 or http://localhost:3080.',
         'settings.localCountHint': ' ({count} set)',
@@ -328,6 +336,139 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // -----------------------------------------------------------------------
+    // Floating-window position
+    //
+    // Byte-identical to the copy in `src/i18n.js`; `scripts/test-i18n.mjs` compares
+    // the two, which is what keeps this hand-written bundle honest.
+    // -----------------------------------------------------------------------
+
+    /** Where the floating window's position is stored. */
+    const POSITION_KEY = 'dsh-toolong-warning.position.v1'
+
+    /** Gap kept from the viewport edges, in pixels. */
+    const POSITION_MARGIN = 8
+
+    /** How much of the window must stay visible when it is dragged to an edge. */
+    const POSITION_MIN_VISIBLE = 24
+
+    /** Parse a stored position. Anything malformed yields undefined ("not moved yet"). */
+    function parsePosition(raw) {
+      const value = typeof raw === 'string' ? safeJson(raw) : raw
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+      const x = value.x
+      const y = value.y
+      if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
+      if (typeof y !== 'number' || !Number.isFinite(y)) return undefined
+      return { x, y }
+    }
+
+    /** JSON.parse that returns undefined instead of throwing. */
+    function safeJson(text) {
+      try {
+        return JSON.parse(text)
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
+     * Keep a position within reach: never past the margin on the right/bottom, and
+     * never so far off the left/top that less than `minVisible` pixels remain.
+     *
+     * The left/top bound is deliberately negative-allowing: when the window is wider
+     * than the viewport, letting it slide left is what makes its right-hand content
+     * reachable, whereas clamping at 0 would strand it.
+     * @param position - `{ x, y }` in viewport coordinates.
+     * @param viewport - `{ width, height }` of the visual viewport.
+     * @param size - `{ width, height }` of the window itself.
+     * @param margin - gap kept from the right/bottom edges.
+     * @param minVisible - pixels of the window that must remain on screen.
+     * @returns a clamped `{ x, y }`.
+     */
+    function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE) {
+      const x = Number.isFinite(position?.x) ? position.x : 0
+      const y = Number.isFinite(position?.y) ? position.y : 0
+      const viewWidth = Number.isFinite(viewport?.width) ? viewport.width : undefined
+      const viewHeight = Number.isFinite(viewport?.height) ? viewport.height : undefined
+      const ownWidth = Number.isFinite(size?.width) ? size.width : 0
+      const ownHeight = Number.isFinite(size?.height) ? size.height : 0
+      const minX = -(ownWidth - minVisible)
+      const maxX = viewWidth === undefined ? x : Math.max(minX, viewWidth - minVisible - margin)
+      const maxY = viewHeight === undefined ? y : Math.max(0, viewHeight - minVisible - margin)
+      // An unmeasured window (no size at all) cannot be reasoned about: the
+      // "keep `minVisible` pixels on screen" rule would snap a zero-width window to
+      // exactly `minVisible`, moving it for no reason. Leave it where it is.
+      if (viewWidth === undefined || viewHeight === undefined || ownWidth <= 0 || ownHeight <= 0) return { x, y }
+      return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, 0), maxY) }
+    }
+
+    /** Read the stored position, treating an unusable storage as "not moved yet". */
+    function readStoredPosition(storage) {
+      try {
+        return parsePosition(storage?.getItem(POSITION_KEY) ?? undefined)
+      } catch {
+        return undefined
+      }
+    }
+
+    /** Persist the position; `undefined` clears it. False when it cannot be stored. */
+    function writeStoredPosition(storage, position) {
+      try {
+        if (position === undefined) storage?.removeItem(POSITION_KEY)
+        else storage?.setItem(POSITION_KEY, JSON.stringify({ x: position.x, y: position.y }))
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * One shared position value, so the window and the settings card agree.
+     * @param options - a storage object (defaults to `window.localStorage`).
+     * @returns `{ get, subscribe, set, reset, has }`.
+     */
+    function createPositionStore(options) {
+      const storage = options?.storage ?? (typeof window === 'undefined' ? undefined : window.localStorage)
+      let value = readStoredPosition(storage)
+      const listeners = new Set()
+      /** Tell every listener, surviving one that throws. */
+      const notify = () => {
+        for (const listener of [...listeners]) {
+          try {
+            listener()
+          } catch {
+            // One failing listener must not stop the others.
+          }
+        }
+      }
+      return {
+        get: () => value,
+        /** Whether a position has been stored (drives the settings reset row). */
+        has: () => value !== undefined,
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        /** Store a position; the in-memory value moves even when storage refuses. */
+        set(next) {
+          const parsed = parsePosition(next)
+          if (parsed === undefined) return false
+          const stored = writeStoredPosition(storage, parsed)
+          value = parsed
+          notify()
+          return stored
+        },
+        /** Forget the position, returning the window to its default corner. */
+        reset() {
+          const stored = writeStoredPosition(storage, undefined)
+          value = undefined
+          notify()
+          return stored
+        },
+      }
+    }
+
     /** Host route prefix; the page's own origin serves it. */
     const API = '/api/dsh-toolong-warning'
     /** Settings namespace = this plugin's profile entry id. */
@@ -433,8 +574,11 @@ window.__ModuleLoader__.load({
     const STYLE_TEXT = `
 .dsh-tlw-overlay{position:fixed;top:12px;right:14px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 28px));font-size:12px;line-height:1.5;pointer-events:none}
 .dsh-tlw-overlay>*{pointer-events:auto}
-.dsh-tlw-card{box-sizing:border-box;background:var(--dsw-alias-bg-layer-3,#1b1f2a);color:var(--dsw-alias-label-primary,#e8ecf5);border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.14));border-radius:10px;padding:8px 10px;box-shadow:0 6px 20px rgba(0,0,0,.28);backdrop-filter:blur(6px)}
-.dsh-tlw-head{display:flex;align-items:center;gap:6px}
+.dsh-tlw-card{box-sizing:border-box;background:var(--dsw-alias-bg-layer-3,#1b1f2a);color:var(--dsw-alias-label-primary,#e8ecf5);border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.14));border-radius:10px;padding:8px 10px;box-shadow:0 6px 20px rgba(0,0,0,.28);backdrop-filter:blur(6px);cursor:grab}
+.dsh-tlw-head{display:flex;align-items:center;gap:6px;cursor:grab}
+.dsh-tlw-card[data-dsh-dragging=true],.dsh-tlw-head[data-dsh-dragging=true]{cursor:grabbing}
+.dsh-tlw-overlay[data-dsh-dragging=true]{user-select:none}
+.dsh-tlw-card button,.dsh-tlw-card input,.dsh-tlw-card select{cursor:auto}
 .dsh-tlw-title{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-tlw-close{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#8b93a7);cursor:pointer;font:inherit;padding:0 4px;border-radius:4px}
 .dsh-tlw-close:hover{color:var(--dsw-alias-label-primary,#e8ecf5)}
@@ -614,21 +758,150 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Elements that own their own pointer behaviour. A press that starts on one of
+     * these must not turn into a window drag, or the controls inside the card
+     * (dismiss, adjust, collapse, number fields) would stop working.
+     */
+    const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"], [contenteditable="true"]'
+
+    /**
      * The always-visible floating window. Shows the compaction count whenever a
      * conversation is open in the main view, and adds the warning card only
      * while the host's measured state meets the thresholds.
      */
     function LongConversationOverlay(props) {
-      const { ctx, thresholds, form, formRevision, overrideStore, languageStore } = props
+      const { ctx, thresholds, form, formRevision, overrideStore, languageStore, positionStore } = props
       const sessionId = useMainSessionId(ctx)
       const override = React.useSyncExternalStore(overrideStore.subscribe, overrideStore.get)
       const lang = React.useSyncExternalStore(languageStore.subscribe, languageStore.get)
+      const savedPosition = positionStore === undefined
+        ? undefined
+        : React.useSyncExternalStore(positionStore.subscribe, positionStore.get)
       /** Translate in the language currently selected. */
       const tr = (key, params) => t(lang, key, params)
       const intervalMs = typeof thresholds.statsIntervalMs === 'number' ? thresholds.statsIntervalMs : 15000
       const { state, status } = useWarningState(sessionId, intervalMs, thresholds.enabled !== false, override)
       const [dismissedFor, setDismissedFor] = React.useState(null)
       const [collapsed, setCollapsed] = React.useState(false)
+
+      // --- draggable window -------------------------------------------------
+      // The window is pinned to the top-right corner until it is dragged once;
+      // after that it travels to a position the browser remembers.
+      const containerRef = React.useRef(null)
+      // Pointer and live position live in refs: a pointermove must not re-render
+      // the whole window through React state, and the committed position is
+      // written to storage once, on release.
+      const dragRef = React.useRef(null)
+      const liveRef = React.useRef(undefined)
+      const [, forceRender] = React.useReducer((tick) => tick + 1, 0)
+
+      /** Clip a position against the current viewport and window size. */
+      const clampToViewport = (position) => {
+        if (position === undefined) return undefined
+        const node = containerRef.current
+        if (node === null || typeof node.getBoundingClientRect !== 'function') return position
+        const rect = node.getBoundingClientRect()
+        const view = typeof window === 'undefined' ? undefined : window
+        const viewport = {
+          width: view?.innerWidth ?? rect.right + POSITION_MARGIN,
+          height: view?.innerHeight ?? rect.bottom + POSITION_MARGIN,
+        }
+        return clampPosition(position, viewport, { width: rect.width, height: rect.height })
+      }
+
+      const endDrag = (commit) => {
+        if (dragRef.current === null) return
+        dragRef.current = null
+        const node = containerRef.current
+        if (node !== null) node.removeAttribute('data-dsh-dragging')
+        if (commit !== undefined && positionStore !== undefined) positionStore.set(commit)
+        liveRef.current = undefined
+        if (typeof document !== 'undefined') document.body.style.userSelect = ''
+        forceRender()
+      }
+
+      /** Start dragging, unless this pointer landed on a control. */
+      const onPointerDown = (event) => {
+        if (positionStore === undefined) return
+        if (event.button !== undefined && event.button !== 0) return
+        const target = event.target
+        if (target !== null && typeof target.closest === 'function'
+          && target.closest(INTERACTIVE_SELECTOR) !== null) return
+        const node = containerRef.current
+        if (node === null || containerRef.current === null) return
+        const rect = node.getBoundingClientRect()
+        dragRef.current = { startX: event.clientX, startY: event.clientY, originX: rect.left, originY: rect.top, moved: false }
+        const element = event.currentTarget
+        if (element !== null && element !== undefined && typeof element.setPointerCapture === 'function') {
+          try {
+            element.setPointerCapture(event.pointerId)
+          } catch {
+            // Capture is a convenience: losing it only means the drag ends if the
+            // pointer leaves the element.
+          }
+        }
+      }
+
+      const onPointerMove = (event) => {
+        const drag = dragRef.current
+        if (drag === null) return
+        const dx = event.clientX - drag.startX
+        const dy = event.clientY - drag.startY
+        if (drag.moved === false && Math.abs(dx) + Math.abs(dy) < 3) return
+        drag.moved = true
+        const node = containerRef.current
+        if (node !== null) {
+          node.setAttribute('data-dsh-dragging', 'true')
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (typeof document !== 'undefined') document.body.style.userSelect = 'none'
+        }
+        liveRef.current = clampToViewport({ x: drag.originX + dx, y: drag.originY + dy })
+        forceRender()
+      }
+
+      const onPointerUp = () => { endDrag(liveRef.current) }
+      const onPointerCancel = () => { endDrag(undefined) }
+      const onLostPointerCapture = () => { endDrag(liveRef.current) }
+
+      const positionStyle = (() => {
+        const live = dragRef.current === null ? undefined : liveRef.current
+        const position = live ?? savedPosition
+        if (position === undefined) return undefined
+        return { left: position.x + 'px', top: position.y + 'px', right: 'auto' }
+      })()
+      // `.dsh-tlw-overlay` already carries `pointer-events: none` with its children
+      // opting back in, so a moved window keeps letting clicks through to the page.
+      const overlayStyle = positionStyle
+      const dragging = dragRef.current !== null
+
+      // Keep the window reachable: after a resize, a rotation, or the window
+      // growing (the warning card appearing), pull it back into view.
+      React.useEffect(() => {
+        const reclamp = () => {
+          if (positionStore === undefined) return
+          const current = dragRef.current === null ? positionStore.get() : liveRef.current
+          if (current === undefined) return
+          const next = clampToViewport(current)
+          if (next === undefined) return
+          if (dragRef.current !== null) { liveRef.current = next; forceRender(); return }
+          if (next.x !== current.x || next.y !== current.y) positionStore.set(next)
+        }
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('resize', reclamp)
+        }
+        let observer
+        const node = containerRef.current
+        if (typeof ResizeObserver === 'function' && node !== null && node !== undefined) {
+          observer = new ResizeObserver(reclamp)
+          observer.observe(node)
+        }
+        return () => {
+          if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('resize', reclamp)
+          }
+          if (observer !== undefined) observer.disconnect()
+        }
+      })
 
       if (thresholds.enabled === false) return null
       if (sessionId === undefined) return null
@@ -680,13 +953,24 @@ window.__ModuleLoader__.load({
       if (collapsed) {
         return h(
           'div',
-          { className: 'dsh-tlw-overlay', 'data-dsh-plugin': 'toolong-warning' },
+          {
+            className: 'dsh-tlw-overlay',
+            'data-dsh-plugin': 'toolong-warning',
+            ref: containerRef,
+            style: overlayStyle,
+            title: tr('overlay.dragHint'),
+            onPointerDown,
+            onPointerMove,
+            onPointerUp,
+            onPointerCancel,
+            onLostPointerCapture,
+          },
           h(
             'div',
-            { className: 'dsh-tlw-card', 'data-dsh-part': 'collapsed' },
+            { className: 'dsh-tlw-card', 'data-dsh-part': 'collapsed', 'data-dsh-dragging': String(dragging) },
             h(
               'div',
-              { className: 'dsh-tlw-head' },
+              { className: 'dsh-tlw-head', 'data-dsh-dragging': String(dragging), 'aria-label': tr('overlay.dragAria') },
               h('span', { className: 'dsh-tlw-title' }, shouldWarn ? tr('overlay.collapsedWarningTitle') : tr('overlay.title')),
               h('button', {
                 type: 'button',
@@ -748,13 +1032,25 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'dsh-tlw-overlay', 'data-dsh-plugin': 'toolong-warning', 'data-dsh-config-revision': String(formRevision ?? '') },
+        {
+          className: 'dsh-tlw-overlay',
+          'data-dsh-plugin': 'toolong-warning',
+          'data-dsh-config-revision': String(formRevision ?? ''),
+          ref: containerRef,
+          style: overlayStyle,
+          title: tr('overlay.dragHint'),
+          onPointerDown,
+          onPointerMove,
+          onPointerUp,
+          onPointerCancel,
+          onLostPointerCapture,
+        },
         h(
           'div',
-          { className: 'dsh-tlw-card', 'data-dsh-part': 'counter' },
+          { className: 'dsh-tlw-card', 'data-dsh-part': 'counter', 'data-dsh-dragging': String(dragging) },
           h(
             'div',
-            { className: 'dsh-tlw-head' },
+            { className: 'dsh-tlw-head', 'data-dsh-dragging': String(dragging), 'aria-label': tr('overlay.dragAria') },
             h('span', { className: 'dsh-tlw-title' }, tr('overlay.title')),
             h('button', {
               type: 'button',
@@ -885,12 +1181,16 @@ window.__ModuleLoader__.load({
 
     /** The Settings-page section: thresholds, explanation and live diagnostics. */
     function SettingsSection(props) {
-      const { ctx, form, thresholds, overrideStore, languageStore } = props
+      const { ctx, form, thresholds, overrideStore, languageStore, positionStore } = props
       const [snapshot, setSnapshot] = React.useState(form.getSnapshot())
       const [failure, setFailure] = React.useState(undefined)
       React.useEffect(() => form.subscribe(() => { setSnapshot(form.getSnapshot()) }), [form])
       const override = React.useSyncExternalStore(overrideStore.subscribe, overrideStore.get)
       const lang = React.useSyncExternalStore(languageStore.subscribe, languageStore.get)
+      // The reset row only means something once the window has actually been moved.
+      const movedWindow = positionStore === undefined
+        ? false
+        : React.useSyncExternalStore(positionStore.subscribe, positionStore.has)
       const tr = (key, params) => t(lang, key, params)
       const sessionId = useMainSessionId(ctx)
       const { state } = useWarningState(sessionId, 15000, true, override)
@@ -936,6 +1236,23 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsh-tlw-card-title' }, tr('settings.title')),
         h('div', { className: 'dsh-tlw-desc' }, tr('settings.intro')),
         h(LanguageRow, { languageStore, lang }),
+        movedWindow
+          ? h(
+              'div',
+              { className: 'dsh-tlw-field', 'data-dsh-part': 'reset-position' },
+              h(
+                'div',
+                { className: 'dsh-tlw-field-head' },
+                h('span', null, tr('settings.resetPosition')),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-tlw-btn',
+                  onClick: () => { positionStore.reset() },
+                }, tr('settings.resetPosition')),
+              ),
+              h('div', { className: 'dsh-tlw-desc' }, tr('settings.resetPositionHint')),
+            )
+          : null,
         h(
           'div',
           { className: hostWritable ? 'dsh-tlw-muted' : 'dsh-tlw-desc', 'data-dsh-part': 'write-mode' },
@@ -1088,7 +1405,10 @@ window.__ModuleLoader__.load({
         // One language store for both halves: the settings card switches it, the
         // floating window re-renders from it in the same frame.
         const languageStore = createLanguageStore({ ctx })
-        const overlayProps = { ctx, form, thresholds, formRevision, overrideStore, languageStore }
+        // One position store for both halves: the window writes where it was left,
+        // the settings card can send it back to the corner.
+        const positionStore = createPositionStore({ storage: typeof window === 'undefined' ? undefined : window.localStorage })
+        const overlayProps = { ctx, form, thresholds, formRevision, overrideStore, languageStore, positionStore }
 
         let disposeOverlay
         try {
@@ -1120,7 +1440,7 @@ window.__ModuleLoader__.load({
               // Resolved at render time, so the nav row follows the language switch.
               label: () => t(languageStore.get(), 'settings.title'),
               locale: SETTINGS_NS,
-            }, () => h(SettingsSection, { ctx, form, thresholds, overrideStore, languageStore })))
+            }, () => h(SettingsSection, { ctx, form, thresholds, overrideStore, languageStore, positionStore })))
           } catch (error) {
             console.warn('[toolong-warning] settings.section unavailable:', error)
           }
