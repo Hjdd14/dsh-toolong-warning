@@ -4,6 +4,67 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-09-30
+
+### Added
+
+- **Desktop (Electron) adaptation for the floating window.** The DSH Desktop app is another
+  surface over the same installation, and it owns the window chrome: a macOS top strip and
+  its traffic lights, a Windows command bar with the caption buttons, or a content viewport
+  moved below that bar. The window now treats the reserved band as unusable space in every
+  one of those shapes:
+  - its default top and the smallest top it can be dragged to are derived from the frame's
+    own `--dsh-frame-overlay-top`, **minus whatever the shell already reserved** by moving
+    its content viewport down — so a shell that layers chrome over content and a shell that
+    moves the content below it each get the right answer, and neither is compensated twice;
+  - the space it is clamped against is measured by an inert probe spanning its containing
+    block, instead of assumed to be the window object. A shell whose content viewport starts
+    below its command bar both shrinks that space and offsets the coordinate space the
+    window's inline `left`/`top` are written in; before this, dragging there displaced the
+    window by the height of the chrome on **every** drag, and the clamp reasoned about a
+    viewport the window could not actually reach;
+  - it stays out of the shell's `-webkit-app-region` computation, so a plugin layer can no
+    longer silently cancel the window's own drag strips.
+- **Desktop install instructions** in both READMEs, including why `dsh plugin --profile
+  desktop add …` is refused (an application-owned profile is written by the app's in-process
+  plugin manager) and the profile-file route that works instead.
+
+### Notes
+
+- **The Web page is untouched, and that is asserted rather than claimed.** No window chrome
+  exists there, so the frame publishes no inset, the probe measures the viewport itself, the
+  chrome floor is 0 and a drag lands exactly where it always did. The new unit tests cover
+  all four compositions (browser, chrome over content, content moved below chrome, and both)
+  and fail if any of them drifts or enters the chrome.
+- **Browser-half only: no host change.** The desktop composition serves the same `/api`
+  routes through the shell's request forwarding, the loopback fence is the ecosystem's shared
+  copy unchanged, and the desktop page reports itself as loopback — so `moduleGeneration`
+  stays `10`, no new `dsh web` process is required, and the bundle hot-reloads. `dsh.client.platform`
+  stays `web`; that value *is* the desktop consumer's contract, not a web-only one.
+- **No new dependency and no build step.** The `--dsh-frame-overlay-top` read is four lines
+  rather than an import of `@deepseek-ai/dsh-client-ui-primitives`, because the bundle must
+  stay self-contained (DSH serves it from an exact combo URL out of an in-memory response
+  map) and `dsh.client.external` stays empty.
+- **Storage stays per origin.** The desktop app and a page at `http://127.0.0.1:3080` keep
+  separate language choices, window positions and browser-local threshold overrides. That was
+  already true; it is now documented rather than discovered.
+- `npm test` is **507 assertions, 0 failures**: 98 in `test-detect.mjs`, 133 in
+  `test-i18n.mjs` (+29: the frame inset, the measured space, the chrome-aware default top,
+  the drag-origin conversion, the clamp floor, and the end-to-end four-mode drag),
+  49 in `test-coldread.mjs`, 98 in `test-routes.mjs` and 129 in `check-client.mjs`
+  (+32: the desktop structural contract, including "a platform attribute is never turned
+  into a compensation", plus ten assertions that run the floating window's real render
+  path and check the Web default top). The four-mode drag assertion was reverse-checked:
+  the pre-0.3.0 arithmetic lands a `+50/+40` drag at the wrong place whenever the shell
+  moves its content viewport (measured: `y 124` for a pointer target of `y 88`).
+- **What was and was not verified.** The suites above ran on this machine, and the running
+  `web` host was probed (`/api/dsh-toolong-warning/health` → `moduleGeneration: 10`,
+  `ok: true`, history source available). Nothing was verified **in a browser**: the `web`
+  profile still has `0.1.1` installed from the registry, so that GUI serves neither this
+  version nor 0.2.0 until the package is reinstalled. The Desktop app is not installed on
+  this machine at all, so the desktop half is covered by those offline assertions and is not
+  claimed as verified on a real shell — see `verification.md` for the exact checklist.
+
 ## [0.2.0] — 2026-09-29
 
 ### Added

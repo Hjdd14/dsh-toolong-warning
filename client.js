@@ -352,6 +352,75 @@ window.__ModuleLoader__.load({
     /** How much of the window must stay visible when it is dragged to an edge. */
     const POSITION_MIN_VISIBLE = 24
 
+    /**
+     * The desktop shell's reserved-top-inset variable. The upstream Web frame
+     * publishes it on `html` only while a desktop shell owns the window chrome,
+     * and a plain browser document publishes nothing — which is what keeps every
+     * helper below a no-op on the Web page.
+     */
+    const FRAME_INSET_VAR = '--dsh-frame-overlay-top'
+
+    /** Default gap kept from the top edge when no window chrome is reserved. */
+    const OVERLAY_MIN_TOP = 12
+
+    /**
+     * Read the desktop shell's reserved top inset in pixels. A missing variable,
+     * an empty string, and any unparseable value all mean "no chrome reserved
+     * here", so this degrades to 0 instead of moving the window for no reason.
+     */
+    function readFrameInset(style) {
+      const raw = style?.getPropertyValue?.(FRAME_INSET_VAR)
+      const value = typeof raw === 'string' ? Number.parseFloat(raw) : Number.NaN
+      return Number.isFinite(value) ? value : 0
+    }
+
+    /**
+     * The area the floating window is laid out within: a fixed element lives
+     * inside its containing block, which a desktop shell may have moved below its
+     * command bar. The caller passes an inert probe spanning that block, so the
+     * measurement is exact and the window's inline `left`/`top` are known to be in
+     * the measured space. A missing or unmeasured probe (a plain page, or the body
+     * the fallback mount appends to) falls back to the visual viewport, which is
+     * what this window has always used.
+     */
+    function overlaySpace(probe, viewport) {
+      const rect = typeof probe?.getBoundingClientRect === 'function' ? probe.getBoundingClientRect() : undefined
+      if (rect !== undefined
+        && Number.isFinite(rect.left) && Number.isFinite(rect.top)
+        && rect.width > 0 && rect.height > 0) {
+        return { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+      }
+      return {
+        x: 0,
+        y: 0,
+        width: Number.isFinite(viewport?.innerWidth) ? viewport.innerWidth : 0,
+        height: Number.isFinite(viewport?.innerHeight) ? viewport.innerHeight : 0,
+      }
+    }
+
+    /**
+     * The default top of the unmoved window: the reserved chrome the shell has
+     * NOT already consumed. Subtracting what the frame already reserved is what
+     * keeps a desktop shell from being compensated twice.
+     */
+    function overlayTopFor(inset, box, min = OVERLAY_MIN_TOP) {
+      const reserved = Number.isFinite(box?.y) ? box.y : 0
+      const chrome = Number.isFinite(inset) ? inset : 0
+      return Math.max(min, Math.round(chrome - reserved))
+    }
+
+    /**
+     * The window's origin in the coordinate space its inline `left`/`top` are
+     * written in. A measured rect is in client coordinates, so the containing
+     * block's own origin must be subtracted before a drag delta is added.
+     */
+    function dragOrigin(rect, box) {
+      return {
+        x: (Number.isFinite(rect?.left) ? rect.left : 0) - (Number.isFinite(box?.x) ? box.x : 0),
+        y: (Number.isFinite(rect?.top) ? rect.top : 0) - (Number.isFinite(box?.y) ? box.y : 0),
+      }
+    }
+
     /** Parse a stored position. Anything malformed yields undefined ("not moved yet"). */
     function parsePosition(raw) {
       const value = typeof raw === 'string' ? safeJson(raw) : raw
@@ -386,21 +455,24 @@ window.__ModuleLoader__.load({
      * @param minVisible - pixels of the window that must remain on screen.
      * @returns a clamped `{ x, y }`.
      */
-    function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE) {
+    function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE, minY = 0) {
       const x = Number.isFinite(position?.x) ? position.x : 0
       const y = Number.isFinite(position?.y) ? position.y : 0
       const viewWidth = Number.isFinite(viewport?.width) ? viewport.width : undefined
       const viewHeight = Number.isFinite(viewport?.height) ? viewport.height : undefined
       const ownWidth = Number.isFinite(size?.width) ? size.width : 0
       const ownHeight = Number.isFinite(size?.height) ? size.height : 0
+      const floor = Number.isFinite(minY) ? Math.max(0, minY) : 0
       const minX = -(ownWidth - minVisible)
       const maxX = viewWidth === undefined ? x : Math.max(minX, viewWidth - minVisible - margin)
-      const maxY = viewHeight === undefined ? y : Math.max(0, viewHeight - minVisible - margin)
+      // The chrome floor wins over the bottom edge: in a window too short for both,
+      // pushing the window back up into the chrome would be the worse outcome.
+      const maxY = viewHeight === undefined ? y : Math.max(floor, viewHeight - minVisible - margin)
       // An unmeasured window (no size at all) cannot be reasoned about: the
       // "keep `minVisible` pixels on screen" rule would snap a zero-width window to
       // exactly `minVisible`, moving it for no reason. Leave it where it is.
       if (viewWidth === undefined || viewHeight === undefined || ownWidth <= 0 || ownHeight <= 0) return { x, y }
-      return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, 0), maxY) }
+      return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, floor), maxY) }
     }
 
     /** Read the stored position, treating an unusable storage as "not moved yet". */
@@ -579,6 +651,15 @@ window.__ModuleLoader__.load({
 .dsh-tlw-card[data-dsh-dragging=true],.dsh-tlw-head[data-dsh-dragging=true]{cursor:grabbing}
 .dsh-tlw-overlay[data-dsh-dragging=true]{user-select:none}
 .dsh-tlw-card button,.dsh-tlw-card input,.dsh-tlw-card select{cursor:auto}
+/* A desktop shell owns the window chrome and marks <html> with data-platform.
+   Two rules keep this window from fighting it: a layer that inherits the shell's
+   body-level app-region gets its own app-region reset, because such a layer can
+   silently cancel the window's drag strips, while the card and everything in it
+   stays a plain click target. Both are inert on the Web page, which never sets
+   the mark. */
+html[data-platform] .dsh-tlw-overlay{-webkit-app-region:initial!important}
+html[data-platform] .dsh-tlw-card{-webkit-app-region:no-drag}
+html[data-platform] [data-dsh-toolong-warning-root]{-webkit-app-region:initial!important}
 .dsh-tlw-title{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-tlw-close{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#8b93a7);cursor:pointer;font:inherit;padding:0 4px;border-radius:4px}
 .dsh-tlw-close:hover{color:var(--dsw-alias-label-primary,#e8ecf5)}
@@ -795,18 +876,55 @@ window.__ModuleLoader__.load({
       const liveRef = React.useRef(undefined)
       const [, forceRender] = React.useReducer((tick) => tick + 1, 0)
 
-      /** Clip a position against the current viewport and window size. */
-      const clampToViewport = (position) => {
+      // --- the containing block a desktop shell owns -------------------------
+      // The window is `position: fixed`, so its inline offsets are relative to its
+      // containing block. A desktop shell may move that block below its own command
+      // bar, which makes the offsets something other than client coordinates — and
+      // clamping against `window` would then both misjudge the space and displace
+      // the window a little on every drag. An inert probe spanning the block
+      // (`position: fixed; inset: 0`) measures it exactly, so the same code says
+      // "viewport" on a plain page and "content viewport" on a shell.
+      const probeRef = React.useRef(null)
+      const autoTopRef = React.useRef(null)
+
+      /** The chrome inset the shell publishes right now (0 on a plain page). */
+      const frameInset = () => {
+        const view = typeof window === 'undefined' ? undefined : window
+        if (typeof view?.getComputedStyle !== 'function' || typeof document === 'undefined') return 0
+        return readFrameInset(view.getComputedStyle(document.documentElement))
+      }
+
+      /** The area the window is laid out in, right now. */
+      const currentSpace = () => overlaySpace(probeRef.current, typeof window === 'undefined' ? undefined : window)
+
+      /** The smallest top the window may take: the chrome band, in its own space. */
+      const minTop = (box) => Math.max(0, Math.round(frameInset() - box.y))
+
+      /**
+       * Clip a position against the space the window lives in and its own size.
+       * A drag passes the space and chrome floor it measured once on pointer-down,
+       * so a pointermove does not re-read the shell's geometry.
+       */
+      const clampToViewport = (position, space, floor) => {
         if (position === undefined) return undefined
         const node = containerRef.current
         if (node === null || typeof node.getBoundingClientRect !== 'function') return position
         const rect = node.getBoundingClientRect()
-        const view = typeof window === 'undefined' ? undefined : window
+        const box = space ?? currentSpace()
+        // A space the probe could not measure falls back to the window, exactly as
+        // this helper behaved before the window became draggable.
         const viewport = {
-          width: view?.innerWidth ?? rect.right + POSITION_MARGIN,
-          height: view?.innerHeight ?? rect.bottom + POSITION_MARGIN,
+          width: box.width > 0 ? box.width : rect.right + POSITION_MARGIN,
+          height: box.height > 0 ? box.height : rect.bottom + POSITION_MARGIN,
         }
-        return clampPosition(position, viewport, { width: rect.width, height: rect.height })
+        return clampPosition(
+          position,
+          viewport,
+          { width: rect.width, height: rect.height },
+          POSITION_MARGIN,
+          POSITION_MIN_VISIBLE,
+          floor ?? minTop(box),
+        )
       }
 
       const endDrag = (commit) => {
@@ -830,7 +948,22 @@ window.__ModuleLoader__.load({
         const node = containerRef.current
         if (node === null || containerRef.current === null) return
         const rect = node.getBoundingClientRect()
-        dragRef.current = { startX: event.clientX, startY: event.clientY, originX: rect.left, originY: rect.top, moved: false }
+        // The rect is in client coordinates while `left`/`top` are relative to the
+        // containing block, so the block's own origin is removed here. Without that
+        // a shell whose content viewport starts below its chrome would shift the
+        // window further down on every drag. The space and the chrome floor are
+        // measured once here and reused by every pointermove.
+        const space = currentSpace()
+        const origin = dragOrigin(rect, space)
+        dragRef.current = {
+          startX: event.clientX,
+          startY: event.clientY,
+          originX: origin.x,
+          originY: origin.y,
+          space,
+          floor: minTop(space),
+          moved: false,
+        }
         const element = event.currentTarget
         if (element !== null && element !== undefined && typeof element.setPointerCapture === 'function') {
           try {
@@ -855,7 +988,7 @@ window.__ModuleLoader__.load({
           if (typeof event.preventDefault === 'function') event.preventDefault()
           if (typeof document !== 'undefined') document.body.style.userSelect = 'none'
         }
-        liveRef.current = clampToViewport({ x: drag.originX + dx, y: drag.originY + dy })
+        liveRef.current = clampToViewport({ x: drag.originX + dx, y: drag.originY + dy }, drag.space, drag.floor)
         forceRender()
       }
 
@@ -863,10 +996,16 @@ window.__ModuleLoader__.load({
       const onPointerCancel = () => { endDrag(undefined) }
       const onLostPointerCapture = () => { endDrag(liveRef.current) }
 
+      // The unmoved window keeps the stylesheet's right-anchored corner, but its
+      // top follows the shell's chrome: `overlayTopFor` subtracts whatever the frame
+      // already reserved, so a shell that moved its content viewport below the chrome
+      // is not compensated twice. On a plain page this is the stylesheet's own 12px.
+      const autoTop = overlayTopFor(frameInset(), currentSpace())
+      autoTopRef.current = autoTop
       const positionStyle = (() => {
         const live = dragRef.current === null ? undefined : liveRef.current
         const position = live ?? savedPosition
-        if (position === undefined) return undefined
+        if (position === undefined) return { top: autoTop + 'px' }
         return { left: position.x + 'px', top: position.y + 'px', right: 'auto' }
       })()
       // `.dsh-tlw-overlay` already carries `pointer-events: none` with its children
@@ -874,13 +1013,53 @@ window.__ModuleLoader__.load({
       const overlayStyle = positionStyle
       const dragging = dragRef.current !== null
 
+      // Inert measure box spanning the window's containing block: empty,
+      // transparent, and ignoring pointers. On a desktop whose content viewport sits
+      // below the window chrome, this is what tells the drag and clamp code how much
+      // room the window actually has.
+      const probe = h('div', {
+        ref: probeRef,
+        'data-dsh-part': 'probe',
+        'aria-hidden': 'true',
+        style: {
+          position: 'fixed',
+          left: '0px',
+          top: '0px',
+          right: '0px',
+          bottom: '0px',
+          pointerEvents: 'none',
+        },
+      })
+
+      // Measure before the first paint: a desktop shell's reserved chrome changes
+      // the window's default top, and a one-frame flash into that chrome is exactly
+      // what this adaptation exists to avoid. The probe exists by the time a layout
+      // effect runs, so one extra render settles it.
+      React.useLayoutEffect(() => {
+        const next = overlayTopFor(frameInset(), currentSpace())
+        if (next !== autoTopRef.current) {
+          autoTopRef.current = next
+          forceRender()
+        }
+      }, [])
+
       // Keep the window reachable: after a resize, a rotation, or the window
       // growing (the warning card appearing), pull it back into view.
       React.useEffect(() => {
         const reclamp = () => {
           if (positionStore === undefined) return
           const current = dragRef.current === null ? positionStore.get() : liveRef.current
-          if (current === undefined) return
+          if (current === undefined) {
+            // Unmoved: there is nothing to clamp, but the space the window is laid
+            // out in can still change under it (fullscreen, a platform switch, a
+            // resized frame), so the default top is re-measured and re-applied.
+            const next = overlayTopFor(frameInset(), currentSpace())
+            if (next !== autoTopRef.current) {
+              autoTopRef.current = next
+              forceRender()
+            }
+            return
+          }
           const next = clampToViewport(current)
           if (next === undefined) return
           if (dragRef.current !== null) { liveRef.current = next; forceRender(); return }
@@ -965,6 +1144,7 @@ window.__ModuleLoader__.load({
             onPointerCancel,
             onLostPointerCapture,
           },
+          probe,
           h(
             'div',
             { className: 'dsh-tlw-card', 'data-dsh-part': 'collapsed', 'data-dsh-dragging': String(dragging) },
@@ -1045,6 +1225,7 @@ window.__ModuleLoader__.load({
           onPointerCancel,
           onLostPointerCapture,
         },
+        probe,
         h(
           'div',
           { className: 'dsh-tlw-card', 'data-dsh-part': 'counter', 'data-dsh-dragging': String(dragging) },

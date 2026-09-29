@@ -10,21 +10,21 @@
 | 项目 | 值 |
 |---|---|
 | DSH 版本 | `0.1.7-rc.1` |
-| profile | `web`（`<DSH_HOME>/profiles/web`） |
+| profile | `web`（`<DSH_HOME>/profiles/web`）；桌面端 `desktop` profile 由应用自带宿主驱动，实测时装的是 0.2.0（本适配版待装） |
 | GUI | `http://127.0.0.1:3080` |
 | 验证用真实会话 | `session-<redacted>`（本插件就在这个会话里开发） |
-| 最终运行版本 | `moduleGeneration: 6`（见 §5，这是判断"运行中的进程是否已加载修复后代码"的探针） |
+| 最终运行版本 | `moduleGeneration: 10`（见 §5，这是判断"运行中的进程是否已加载修复后代码"的探针） |
 
 ---
 
-## 1. 离线验证：440 项全部通过（可复现）
+## 1. 离线验证：507 项全部通过（可复现）
 
 ```
 node scripts/test-detect.mjs    ->  98 passed, 0 failed   判定规则、折叠语义、配置解析
-node scripts/test-i18n.mjs      ->  67 passed, 0 failed   中英字典一致性（含内联副本）、语言存储
+node scripts/test-i18n.mjs      -> 133 passed, 0 failed   中英字典一致性（含内联副本）、语言存储、桌面端几何
 node scripts/test-coldread.mjs  ->  49 passed, 0 failed   历史（冷读）源、缓存、fresh 读
 node scripts/test-routes.mjs    ->  98 passed, 0 failed   路由组装、围栏、自检、阈值覆盖、冷读分支、重复投递
-node scripts/check-client.mjs   ->  71 passed, 0 failed   产物结构、schema 形状、挂载、bundle 真跑一遍
+node scripts/check-client.mjs   -> 129 passed, 0 failed   产物结构、schema 形状、挂载、bundle 真跑一遍、桌面端契约、悬浮窗真渲染
 ```
 
 `npm test` 依次跑全部五套；`npm run check:hygiene` 是发布前的隐私闸门（见 §7）。
@@ -431,6 +431,114 @@ ok   and is the version the Config needs
   我无法替你验证：拖动本质是鼠标交互。我能证明的是数学边界、持久化、产物内容与副本一致，
   不能证明你屏幕上那一次拖动的观感。
 
+### 5.8 桌面端（Electron）适配（本轮新增）
+
+**改动范围**：同样只在浏览器半（`client.js` 与 `src/i18n.js`），宿主侧未改一行 —— 桌面端组合提供
+`webServer`/`sessions`/`sessionProjections`，`/api/*` 由外壳转发到同一个 webServer，围栏用的是生态共享
+副本、一字未改，因此 `moduleGeneration` 仍是 10，桌面端也只需新起应用进程（客户端 bundle 仍热重载）。
+
+**依据（本机安装的官方包 + 官方/社区公开文档）**
+
+- 桌面消费的客户端平台就是 `web`：`dsh-client-modules/lib/index.js:714` 只接受 `platform === "web"`，
+  桌面 profile 里所有第三方插件（`@linxin666/*`）也都声明 `web` ⇒ `package.json` 不需要改。
+- 窗口 chrome 由外壳拥有：上游 `ui-layout` 在 `html[data-platform=darwin]` / `html[data-windows-titlebar]`
+  下发布 `--dsh-frame-top-clearance` 与 `--dsh-frame-overlay-top`（clearance+20px，全屏 20px），
+  **普通浏览器文档一个都不发布**（`dsh-client-ui-layout/lib/client.js:73`、README「Window-chrome seat」）。
+- 官方 overlay 内缩助手 `overlayTopMargin(min)`（`dsh-client-ui-primitives/lib/index.js:3543-3555`）
+  的语义被本插件照抄成纯函数，但没有引入该依赖（bundle 必须自包含）。
+- 官方桌面仓库的插件契约明确：扩展/高级模式用桌面自有 root 替换上游 frame，`ui-layout` 不在 boot 图中，
+  root 是命令栏之下独立的 fixed viewport（「fixed 后代无法逃逸进 Desktop chrome」），并警告
+  「插件不得为自己已经消费的边界重复补偿」⇒ 补偿量 = 已发布的 inset − 已实测消费的偏移。
+- app-region 坑（社区 issue）：外壳基样式把 body 子层设为 `no-drag`，继承该值的覆盖层会静默取消窗口
+  拖拽条 ⇒ 本插件只在 `html[data-platform]` 下重置自身 app-region，网页端零影响。
+
+**验证方式与结论**
+
+- **几何全部可测**：新增的 `readFrameInset` / `overlaySpace` / `overlayTopFor` / `dragOrigin` 与
+  扩展后的 `clampPosition`（新增 `minY` 上界）都在 `src/i18n.js`，并被 `client.js` 逐字节复制，
+  `scripts/test-i18n.mjs` 的反漂移清单与常量清单同步扩容。
+- **四种组合的端到端算术测试**（`test-i18n.mjs`）：网页（inset 0 / 盒子 y=0）、chrome 盖在内容上
+  （inset 68 / y=0）、内容视口被移到 chrome 下方（inset 0 / y=36）、两者都有（inset 68 / y=36）。
+  同一段 `+50/+40` 的拖动在四种组合下都必须**落在指针所在处**、且**不进入 chrome**；第三种组合正是
+  旧代码会出错的形态（旧代码把视口的 36px 偏移加进拖动增量，每拖一次就多漂 36px）。
+- **产物契约**（`check-client.mjs` 新增 32 条）：只读 `--dsh-frame-overlay-top`，**不**把
+  `data-platform` / `data-windows-titlebar` / `--dsh-frame-top-clearance` 变成自己的补偿；
+  样式默认 `top:12px` 与 `OVERLAY_MIN_TOP` 一致；探针是 `position:fixed; inset:0`、`pointer-events:none`、
+  `aria-hidden`；拖动原点经 `dragOrigin(rect, space)` 换算；夹取用实测空间与 chrome 上界；
+  首次绘制前用 `useLayoutEffect` 复测；三条 app-region 规则都存在**且**都限定在 `html[data-platform]` 下。
+  其中 10 条是**把悬浮窗真跑一遍**（用桩 `session` 打开一个会话、直接调用 slot 工厂拿到的组件函数）：
+  它必须返回 `.dsh-tlw-overlay` 容器、带探针、并把内联顶部定为 `top:12px`（即网页端默认值），
+  同时把 `right` 留给样式表。
+- **反向验证（两条一起有牙）**：
+  1. 用旧算法（rect 坐标直接当样式坐标、按窗口尺寸夹取、无 chrome 上界）跑同一个 `+50/+40` 拖动，
+     落在 `y=124`，而指针目标是 `y=88` —— 也就是每拖一次向下漂 36px；新算法落在 `y=88`。
+     命令与输出见本节末。
+  2. 把**新助手**改坏后，副本一致性断言必须失败：在一份临时副本里把 `overlayTopFor` 的返回值加上 `+ 0`
+     后运行 `test-i18n.mjs`，得到 `132 passed, 1 failed`，失败项正是
+     `no position helper drifted between the two copies`（临时副本已删除）。
+- **网页端等价性**：普通页面不发布 inset ⇒ `readFrameInset` 返回 0；探针量到的就是视口 ⇒
+  `overlaySpace` 返回 `{x:0,y:0,innerWidth,innerHeight}`；`overlayTopFor(0, {y:0}) = 12` = 样式默认；
+  `minY = 0` ⇒ 既有的 104 条 `test-i18n` 断言全部原样通过（**没有修改任何既有期望值**），
+  本轮 `npm test` 507 条全绿。
+- **隐私闸门**：`npm run check:hygiene` clean（28 files）。
+- **运行中的宿主**：`/api/dsh-toolong-warning/health` 返回 `ok:true`、`moduleGeneration: 10`、
+  `historyReadsAvailable: true`、`sessionsTracked: 3` —— 宿主半未改动，与本轮"只改浏览器半"一致。
+
+**未验证（浏览器观感与本机运行版本）**
+
+- **本机 `web` profile 里装的仍是 0.1.1**（`<DSH_HOME>/profiles/web/node_modules/@hjdd14/dsh-toolong-warning`，
+  2026-09-27 的快照，profile 依赖写的也是 `^0.1.1`）。所以运行中的 GUI **既没有 0.2.0、也没有本轮改动**；
+  要看本轮效果必须先把它装上：
+
+  ```powershell
+  # 开发用：链到本仓库，改 client.js 后刷新页面即可（宿主侧文件仍需新起 dsh web）
+  dsh plugin --profile web add "link:<本仓库 dsh-toolong-warning 目录的绝对路径>"
+  # 或发布/打包后按版本安装
+  ```
+
+  装上之后请按 §6 第 2–13 步在浏览器与桌面端各看一遍；本轮我在浏览器里**没有**做过任何交互验证。
+- 桌面端（真机）见下。
+
+**真机旁证（桌面端 0.2.0 的实测，本轮补记）**
+
+- 桌面端应用确实存在（`@deepseek-ai/dsh-desktop 0.2.0-rc.2`），宿主由应用自带：`dsh-desktop-host` 以
+  `--no-open --port 19387` 启动 `desktop` profile，页面来源是自定义协议 `dsh-app://app/`。
+- 外壳的请求转发 `forwardWebRequest`（应用内 `lib/main.js`）会先删掉
+  `host`/`origin`/`cookie`/`sec-fetch-site`，再用宿主自己那张鉴权 cookie 去 fetch `127.0.0.1:19387`，
+  因此插件的路由收到的是「回环 socket + 回环 Host + 无 Origin」⇒ **loopback 围栏必然放行**。
+  这条原先列为待验证风险，现已关闭：用户在桌面端装 0.2.0 后悬浮窗正常出现、计数有值、并显示过
+  「依据：历史记录」的冷读标注 —— 三件事共同证明「客户端 bundle 加载 + 路由可达 + 状态返回 200」全通。
+- 桌面端的 chrome 契约（从同一安装读出）：Windows 上 preload 设 `data-platform="win32"`、
+  `data-windows-titlebar`、`--dsh-windows-titlebar-height: 40px`，上游 frame 因此发布
+  `--dsh-frame-top-clearance: 40px`、`--dsh-frame-overlay-top: 60px`（全屏 20px）。该构建没有 Desktop
+  自有 frame，属「兼容模式」，`position: fixed` 仍在视口坐标系。⇒ **0.3.0 在 Windows 桌面端的预期值**：
+  默认顶部 60px、拖动下界 60px；而 0.2.0 是 12px，正好落在 40px 标题条里与窗口按钮重叠。
+- 外部 curl 进不去桌面宿主：19387 对没有宿主鉴权 cookie 的请求返回 401，所以桌面端验证只能在应用内做
+  （DevTools 或直接看悬浮窗）。
+
+**未验证（0.3.0 在真机桌面端上的定位效果）**
+
+- 上面证明的是 0.2.0 的通路与你外壳的契约；0.3.0 的定位效果仍需按 §6 第 9–13 步看一遍：
+  1. 悬浮窗默认位置与拖动后的位置都不落在标题条/命令栏与窗口按钮区域（Windows 期望 `top: 60px`）；
+  2. 连续拖动 5 次位置跟随指针、无累积漂移；
+  3. 计数器有数值（= `/api/dsh-toolong-warning/state` 返回 200）；
+  4. 全屏切换后窗口仍可见（内缩降为 20px）；
+  5. macOS 上点击悬浮窗不会让外壳窗口的拖拽条失效。
+- **工作区根目录的 `dsh-toolong-warning.zip` 已在本轮按 0.3.0 重新打包**（与插件目录内容一致）。
+
+**§5.8 用到的反向验证命令（可复现）**
+
+```powershell
+node -e "import('./src/i18n.js').then(({clampPosition,dragOrigin,overlayTopFor,POSITION_MARGIN,POSITION_MIN_VISIBLE})=>{
+ const box={x:0,y:36,width:1000,height:764}, size={width:300,height:200};
+ const rect={left:800,top:box.y+overlayTopFor(0,box),width:300,height:200};
+ const old=clampPosition({x:rect.left+50,y:rect.top+40},{width:1000,height:800},size);
+ const o=dragOrigin(rect,box);
+ const now=clampPosition({x:o.x+50,y:o.y+40},box,size,POSITION_MARGIN,POSITION_MIN_VISIBLE,0);
+ console.log('pointer',rect.left+50,rect.top+40,'| old',box.y+old.y,'| new',box.y+now.y);})"
+# 输出：pointer 850 88 | old 124 | new 88
+```
+
 ---
 
 ## 6. 尚未验证 / 需要你确认的部分（诚实声明）
@@ -470,11 +578,14 @@ ok   and is the version the Config needs
    请刷新页面，在设置页「长对话提醒」分区把语言切到 English，确认**悬浮窗与设置页同时**变英文，
    且刷新后仍保持英文（选择存在浏览器里）。我验证的是字典完整、两份副本一致、切换逻辑有测试，
    没验证的是你屏幕上那两处的实际显示。
+7. **桌面端整体需要在真机上确认一次（本轮新增，见 §5.8）。**
+   开发机上没有桌面端应用，所以「避开窗口 chrome / 拖动不漂移 / 计数器出数 / 全屏可见 / macOS 拖拽条不受
+   影响」这五件事我给的是离线断言与推导，不是屏幕证据。请按下面的第 9–13 步看一遍。
 
 ### 建议的收尾验证（各一步）
 
 ```powershell
-# 1) 运行中的版本与两个自检（应返回 moduleGeneration: 8，且 selfTest / historySelfTest 均 pass）
+# 1) 运行中的版本与两个自检（应返回 moduleGeneration: 10，且 selfTest / historySelfTest 均 pass）
 curl.exe -s "http://127.0.0.1:3080/api/dsh-toolong-warning/health?selftest=1"
 
 # 2) 随便挑一个别的会话 id 直接查（应返回 known:true 且 source:"history"，count 为数字）
@@ -490,4 +601,11 @@ curl.exe -s "http://127.0.0.1:3080/api/dsh-toolong-warning/state?sessionId=<本�
 #    这次会写入 profile 配置（对所有会话生效），刷新后仍在
 # 7) 在浏览器里切换一次对话，确认无需刷新就能看到新的计数
 # 8) 再执行一次 /compact，确认计数恰好 +1（而不是 +2）
+
+# 以下为桌面端（在桌面应用里做，不是浏览器）
+# 9)  在桌面应用 Plugins 页安装/启用本插件，确认悬浮窗出现且默认位置在命令栏下方
+# 10) 连续拖动悬浮窗 5 次：位置应跟随指针，不出现每次向下累积的漂移
+# 11) 确认计数器显示数字（不是「同步失败」）—— 即 /api/dsh-toolong-warning/state 返回 200
+# 12) 切换一次全屏再切回：悬浮窗仍在可视区域内
+# 13) macOS：拖动窗口标题条，确认点击悬浮窗之后窗口依然可以被拖动（拖拽条未被取消）
 ```

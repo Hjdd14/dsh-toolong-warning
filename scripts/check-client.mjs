@@ -150,6 +150,65 @@ section('client.js: the window is draggable')
   check('a growing window re-clamps too', client.includes('new ResizeObserver('), true)
 }
 
+section('client.js: the desktop adaptation')
+{
+  // A desktop shell owns the window chrome. The adaptation has to be measurable
+  // and must not be a second, independent guess: the reserved band is read from the
+  // frame's own variable, the space the window is laid out in is measured, and a
+  // platform attribute is never turned into a compensation of its own — the shell
+  // either overlays its content (variable published) or moves it (nothing
+  // published), and a plugin that compensated in both cases would sit tens of
+  // pixels too low in one of them.
+  const client = await readFile(join(ROOT, 'client.js'), 'utf8')
+  const i18n = await import('../src/i18n.js')
+
+  check('reads the frame\'s own reserved-inset variable',
+    client.includes("FRAME_INSET_VAR = '--dsh-frame-overlay-top'"), true)
+  check('never derives compensation from a platform attribute',
+    /dataset\.platform|data-windows-titlebar|dsh-frame-top-clearance/.test(client), false)
+  check('the desktop marker only scopes stylesheet hygiene',
+    /documentElement\.dataset|documentElement\.getAttribute/.test(client), false)
+
+  // The stylesheet keeps a default top for the pre-measure frame; the measured top
+  // must agree with it, or the window would jump on every mount.
+  const defaultTop = /\.dsh-tlw-overlay\{[^}]*top:(\d+)px/.exec(client)
+  check('the stylesheet still declares a default top', defaultTop !== null, true)
+  check('and the helper default agrees with it', Number(defaultTop?.[1]), i18n.OVERLAY_MIN_TOP)
+  check('the reserved inset has a single named constant', i18n.FRAME_INSET_VAR, '--dsh-frame-overlay-top')
+
+  // The containing-block probe: without it a shell that moved its content viewport
+  // would both mis-clamp the window and displace it on every drag.
+  const probeStart = client.indexOf("const probe = h('div', {")
+  const probeSource = probeStart === -1 ? '' : client.slice(probeStart, probeStart + 500)
+  check('the window measures its containing block with a probe', probeStart !== -1, true)
+  check('the probe spans that block',
+    ["position: 'fixed'", "left: '0px'", "top: '0px'", "right: '0px'", "bottom: '0px'"].every((needle) => probeSource.includes(needle)), true)
+  check('the probe ignores pointers', probeSource.includes("pointerEvents: 'none'"), true)
+  check('the probe is hidden from assistive technology', probeSource.includes("'aria-hidden': 'true'"), true)
+  check('the probe is not a visible card', /dsh-tlw-card/.test(probeSource), false)
+
+  // The three places the measured space must actually be used.
+  check('the drag origin is converted into the window\'s own space', client.includes('dragOrigin(rect, space)'), true)
+  check('the clamp uses the measured space', client.includes('const box = space ?? currentSpace()'), true)
+  check('the clamp uses the chrome floor', client.includes('floor ?? minTop(box)'), true)
+  check('the unmoved window takes a measured top', client.includes("return { top: autoTop + 'px' }"), true)
+  check('the space is re-measured before the first paint', client.includes('React.useLayoutEffect('), true)
+  check('and again when the frame resizes', client.includes('const next = overlayTopFor(frameInset(), currentSpace())'), true)
+
+  // App-region hygiene (a layer that inherits the shell's `no-drag` silently
+  // disables the window's drag strips). Scoped so the Web page is untouched.
+  check('the overlay resets the shell\'s app-region inheritance',
+    client.includes('html[data-platform] .dsh-tlw-overlay{-webkit-app-region:initial!important}'), true)
+  check('the fallback container does too',
+    client.includes('html[data-platform] [data-dsh-toolong-warning-root]{-webkit-app-region:initial!important}'), true)
+  check('the card stays a click target', client.includes('html[data-platform] .dsh-tlw-card{-webkit-app-region:no-drag}'), true)
+  // Only rules, not the prose that explains them.
+  const appRegionRules = client.split('\n').filter((line) => line.includes('app-region') && line.includes('{'))
+  check('there are app-region rules to scope', appRegionRules.length >= 3, true)
+  check('and every one of them is scoped to the desktop marker',
+    appRegionRules.every((line) => line.trim().startsWith('html[data-platform]')), true)
+}
+
 section('index.js: host half exports')
 {
   const mod = await import(pathToFileURL(join(ROOT, 'index.js')).href)
@@ -387,6 +446,9 @@ section('client.js: the bundle actually runs')
     createElement: (type, props, ...children) => ({ type, props, children }),
     useState: (initial) => [initial, () => {}],
     useEffect: () => {},
+    // The window measures its containing block before the first paint, so a
+    // desktop shell's chrome is honoured without a frame's flash.
+    useLayoutEffect: () => {},
     useCallback: (fn) => fn,
     useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
     // The window keeps its drag state in refs and forces a repaint while dragging,
@@ -477,6 +539,65 @@ section('client.js: the bundle actually runs')
     i18n.resolveInitialLanguage(undefined, undefined, undefined), 'zh')
   check('the label is read from the dictionary, not hard-coded',
     i18n.t('en', 'settings.title'), 'Long-conversation reminder')
+
+  // -------------------------------------------------------------------------
+  // The floating window's own render path. The seat registrations above only
+  // prove the plugin asks for the seat; this runs the component body with the
+  // window stubs installed, which is what catches a broken measurement, a bad
+  // property name, or a default top that no longer matches the stylesheet.
+  // -------------------------------------------------------------------------
+  let overlayOwner
+  const sessionId = 'toolong-warning-overlay-probe'
+  const overlayForm = {
+    getSnapshot: () => ({ status: 'ready', writable: true, value: {}, revision: 0 }),
+    subscribe: () => () => {},
+    set: async () => true,
+  }
+  const overlayInstance = registered.factory(sandboxRequire)
+  await overlayInstance.apply({
+    get: (name) => {
+      if (name === 'configForms') return { get: () => overlayForm }
+      if (name === 'sessions') {
+        return {
+          list: {
+            subscribe: () => () => {},
+            getSnapshot: () => ({ byId: { [sessionId]: { id: sessionId, retainedBy: { mainView: 1 } } } }),
+          },
+        }
+      }
+      return undefined
+    },
+    on: () => {},
+    effect: (factory) => factory(),
+    slots: {
+      inject: (name, register) => register(),
+      register: (options, owner) => {
+        if (options.name === 'shell.overlay') overlayOwner = owner
+        return () => {}
+      },
+    },
+  })
+
+  const element = typeof overlayOwner === 'function' ? overlayOwner() : undefined
+  check('the floating window has a render owner', element !== undefined, true)
+  const tree = element?.type?.(element.props)
+  check('and renders for an open conversation', tree !== null && tree !== undefined, true)
+  check('as the plugin-scoped overlay container', tree?.props?.className, 'dsh-tlw-overlay')
+
+  const children = Array.isArray(tree?.children) ? tree.children : []
+  const probe = children.find((child) => child?.props?.['data-dsh-part'] === 'probe')
+  check('with the containing-block probe as a child', probe !== undefined, true)
+  check('the probe spans its containing block', probe?.props?.style?.position, 'fixed')
+  check('the probe ignores pointers', probe?.props?.style?.pointerEvents, 'none')
+  check('the probe is invisible to assistive technology', probe?.props?.['aria-hidden'], 'true')
+
+  // The Web default, end to end: with no frame inset published and no measured
+  // probe, the window's top is the stylesheet's own 12px and its corner stays the
+  // right-anchored one (no inline left/right, so the class keeps that job).
+  check('the unmoved window takes the Web default top', tree?.props?.style?.top, '12px')
+  check('and leaves its corner to the stylesheet', tree?.props?.style?.right, undefined)
+  check('while still rendering the counter card',
+    children.some((child) => child?.props?.['data-dsh-part'] === 'counter'), true)
 
   for (const key of ['window', 'document', 'navigator']) {
     if (!hadGlobals[key]) {

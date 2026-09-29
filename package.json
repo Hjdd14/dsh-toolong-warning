@@ -1,6 +1,6 @@
 {
   "name": "@hjdd14/dsh-toolong-warning",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DSH plugin: counts completed compactions per session and raises a floating reminder — with bilingual UI — only after repeated compactions plus heavy extra token spend.",
   "keywords": [
     "dsh",

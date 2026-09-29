@@ -20,16 +20,24 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  FRAME_INSET_VAR,
   LANGUAGES,
   LANGUAGE_LABELS,
   MESSAGES,
+  OVERLAY_MIN_TOP,
   POSITION_KEY,
+  POSITION_MARGIN,
+  POSITION_MIN_VISIBLE,
   clampPosition,
   createLanguageStore,
   createPositionStore,
+  dragOrigin,
   messageKeys,
   normalizeLanguage,
+  overlaySpace,
+  overlayTopFor,
   parsePosition,
+  readFrameInset,
   readStoredPosition,
   resolveInitialLanguage,
   t,
@@ -307,6 +315,99 @@ section('the floating window can be moved, and stays reachable')
 }
 
 // ---------------------------------------------------------------------------
+section('desktop window chrome: the inset and the coordinate space')
+// ---------------------------------------------------------------------------
+{
+  // A desktop shell reserves a band at the top of its window, and the upstream Web
+  // frame publishes that reservation on `html`. A plain page publishes nothing, and
+  // every helper below must then answer with the plain-page value — that equality is
+  // what makes the desktop adaptation a no-op on the Web GUI.
+  const styleOf = (value) => ({ getPropertyValue: (name) => (name === FRAME_INSET_VAR ? value : '') })
+  check('the reserved inset has its own variable', FRAME_INSET_VAR, '--dsh-frame-overlay-top')
+  check('the default top is the stylesheet default', OVERLAY_MIN_TOP, 12)
+  check('no variable means no reserved chrome', readFrameInset(styleOf('')), 0)
+  check('a missing style object is survivable', readFrameInset(undefined), 0)
+  check('a non-numeric value is ignored', readFrameInset(styleOf('auto')), 0)
+  check('a macOS chrome inset is read', readFrameInset(styleOf('68px')), 68)
+  check('the fullscreen inset is read', readFrameInset(styleOf(' 20px')), 20)
+
+  // The space the window is laid out in: a measured probe wins, anything
+  // unmeasurable falls back to the visual viewport.
+  const probeOf = (rect) => (rect === undefined ? undefined : { getBoundingClientRect: () => rect })
+  const windowLike = { innerWidth: 1000, innerHeight: 800 }
+  const viewport = { width: 1000, height: 800 }
+  check('a measured probe defines the space',
+    overlaySpace(probeOf({ left: 0, top: 36, width: 1000, height: 764 }), windowLike),
+    { x: 0, y: 36, width: 1000, height: 764 })
+  check('a missing probe falls back to the window', overlaySpace(undefined, windowLike), { x: 0, y: 0, width: 1000, height: 800 })
+  check('a zero-sized probe falls back too',
+    overlaySpace(probeOf({ left: 0, top: 0, width: 0, height: 0 }), windowLike), { x: 0, y: 0, width: 1000, height: 800 })
+  check('a non-finite rect falls back too',
+    overlaySpace(probeOf({ left: Number.NaN, top: 0, width: 100, height: 100 }), windowLike), { x: 0, y: 0, width: 1000, height: 800 })
+  check('no window at all does not throw', overlaySpace(undefined, undefined), { x: 0, y: 0, width: 0, height: 0 })
+
+  // The default top: only the chrome the frame has NOT already consumed.
+  check('a plain page keeps the stylesheet default', overlayTopFor(0, { y: 0 }), 12)
+  check('a shell that overlays its content gets the full inset', overlayTopFor(68, { y: 0 }), 68)
+  check('a shell that already moved its viewport is not compensated twice', overlayTopFor(68, { y: 36 }), 32)
+  check('a moved viewport with no published inset keeps the default', overlayTopFor(0, { y: 36 }), 12)
+  check('fullscreen keeps the frame small', overlayTopFor(20, { y: 0 }), 20)
+  check('rubbish insets and boxes degrade to the default', overlayTopFor(Number.NaN, undefined), 12)
+
+  // The drag origin: a measured rect is in client coordinates, style offsets are not.
+  check('a plain page needs no conversion', dragOrigin({ left: 100, top: 20 }, { x: 0, y: 0 }), { x: 100, y: 20 })
+  check('a moved viewport is subtracted', dragOrigin({ left: 100, top: 56 }, { x: 0, y: 36 }), { x: 100, y: 20 })
+  check('a moved viewport with a left edge too', dragOrigin({ left: 100, top: 56 }, { x: 10, y: 36 }), { x: 90, y: 20 })
+  check('missing values do not throw', dragOrigin(undefined, undefined), { x: 0, y: 0 })
+
+  // clampPosition's chrome floor: 0 wherever a plain page ran before.
+  const size = { width: 300, height: 200 }
+  check('the floor defaults to none', clampPosition({ x: 5, y: -50 }, viewport, size), { x: 5, y: 0 })
+  check('the floor keeps the window out of the chrome',
+    clampPosition({ x: 5, y: 0 }, viewport, size, POSITION_MARGIN, POSITION_MIN_VISIBLE, 36), { x: 5, y: 36 })
+  check('a position below the floor is untouched',
+    clampPosition({ x: 5, y: 100 }, viewport, size, POSITION_MARGIN, POSITION_MIN_VISIBLE, 36), { x: 5, y: 100 })
+  check('the floor survives a viewport shorter than itself',
+    clampPosition({ x: 5, y: 0 }, { width: 1000, height: 40 }, size, POSITION_MARGIN, POSITION_MIN_VISIBLE, 36), { x: 5, y: 36 })
+  check('a negative floor is treated as none',
+    clampPosition({ x: 5, y: -1 }, viewport, size, POSITION_MARGIN, POSITION_MIN_VISIBLE, -20), { x: 5, y: 0 })
+  check('an unmeasured window is still left alone',
+    clampPosition({ x: 5, y: -50 }, viewport, {}, POSITION_MARGIN, POSITION_MIN_VISIBLE, 36), { x: 5, y: -50 })
+
+  // The documented desktop arithmetic, end to end: the same drag must land on the
+  // same client point and stay out of the chrome in every composition. The third
+  // mode is the one the old code got wrong — it added the viewport's own offset to
+  // the pointer delta, so the window drifted further down on every drag.
+  const modes = [
+    { name: 'web', inset: 0, box: { x: 0, y: 0, width: 1000, height: 800 } },
+    { name: 'desktop, chrome overlays the content', inset: 68, box: { x: 0, y: 0, width: 1000, height: 800 } },
+    { name: 'desktop, content viewport moved below the chrome', inset: 0, box: { x: 0, y: 36, width: 1000, height: 764 } },
+    { name: 'desktop, moved viewport and a published inset', inset: 68, box: { x: 0, y: 36, width: 1000, height: 764 } },
+  ]
+  const wrong = []
+  for (const mode of modes) {
+    const top = overlayTopFor(mode.inset, mode.box)
+    const rect = { left: 800, top: mode.box.y + top, width: size.width, height: size.height }
+    const origin = dragOrigin(rect, mode.box)
+    const floor = Math.max(0, Math.round(mode.inset - mode.box.y))
+    const moved = clampPosition(
+      { x: origin.x + 50, y: origin.y + 40 },
+      mode.box,
+      size,
+      POSITION_MARGIN,
+      POSITION_MIN_VISIBLE,
+      floor,
+    )
+    const landed = { x: mode.box.x + moved.x, y: mode.box.y + moved.y }
+    if (landed.x !== rect.left + 50 || landed.y !== rect.top + 40) {
+      wrong.push(`${mode.name}: landed ${landed.x},${landed.y} instead of ${rect.left + 50},${rect.top + 40}`)
+    }
+    if (landed.y < Math.max(12, mode.inset)) wrong.push(`${mode.name}: entered the chrome at ${landed.y}`)
+  }
+  check('a drag lands on the pointer and clears the chrome in every mode', wrong, [])
+}
+
+// ---------------------------------------------------------------------------
 section('the inlined bundle dictionary matches src/i18n.js exactly')
 // ---------------------------------------------------------------------------
 {
@@ -418,6 +519,10 @@ section('the inlined bundle dictionary matches src/i18n.js exactly')
     'readStoredPosition',
     'writeStoredPosition',
     'createPositionStore',
+    'readFrameInset',
+    'overlaySpace',
+    'overlayTopFor',
+    'dragOrigin',
   ]
   const missing = []
   const driftedFunctions = []
@@ -432,7 +537,7 @@ section('the inlined bundle dictionary matches src/i18n.js exactly')
 
   // The two constants the helpers read must agree as well.
   const constant = (text, name) => new RegExp(`const ${name} = ([^\\n]+)`).exec(text)?.[1]?.trim()
-  const constantsDrifted = ['POSITION_KEY', 'POSITION_MARGIN', 'POSITION_MIN_VISIBLE']
+  const constantsDrifted = ['POSITION_KEY', 'POSITION_MARGIN', 'POSITION_MIN_VISIBLE', 'FRAME_INSET_VAR', 'OVERLAY_MIN_TOP']
     .filter((name) => constant(moduleSource, name) !== constant(source, name))
   check('the position constants agree between the two copies', constantsDrifted, [])
 }

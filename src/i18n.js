@@ -368,6 +368,12 @@ export function createLanguageStore(options) {
 // The bundle carries a byte-identical copy of these helpers (it cannot import a
 // sibling module — see the note at the top of `client.js`), and
 // `scripts/test-i18n.mjs` asserts the two copies match.
+//
+// Desktop shells own their window chrome, so the helpers below also answer two
+// questions the Web page never asks: how much of the top the shell has already
+// reserved (a CSS variable the frame publishes only on a desktop), and which
+// coordinate space the window's inline offsets are written in once the shell has
+// moved the content viewport. Both degrade to the plain-page answer.
 // ---------------------------------------------------------------------------
 
 /** Where the floating window's position is stored. */
@@ -378,6 +384,106 @@ export const POSITION_MARGIN = 8
 
 /** How much of the window must stay visible when it is dragged to an edge. */
 export const POSITION_MIN_VISIBLE = 24
+
+/**
+ * The desktop shell's reserved-top-inset variable, published on `html` by the
+ * upstream Web frame only while a desktop shell owns the window chrome.
+ * `--dsh-frame-overlay-top` is the frame's own inset for overlays (the chrome
+ * band plus 20px, and 20px in native fullscreen), so reading it is reading the
+ * shell's own answer instead of guessing one from platform attributes. A plain
+ * browser document publishes nothing, which is what keeps this a no-op on the
+ * Web page.
+ */
+export const FRAME_INSET_VAR = '--dsh-frame-overlay-top'
+
+/** Default gap kept from the top edge when no window chrome is reserved. */
+export const OVERLAY_MIN_TOP = 12
+
+/**
+ * Read the desktop shell's reserved top inset in pixels.
+ *
+ * A missing variable, an empty string, and any unparseable value all mean "no
+ * chrome is reserved here" — the browser case — so this degrades to 0 rather
+ * than throwing or moving the window for no reason.
+ * @param style - a computed style source such as `getComputedStyle(document.documentElement)`.
+ * @returns the reserved inset in px, or 0.
+ */
+export function readFrameInset(style) {
+  const raw = style?.getPropertyValue?.(FRAME_INSET_VAR)
+  const value = typeof raw === 'string' ? Number.parseFloat(raw) : Number.NaN
+  return Number.isFinite(value) ? value : 0
+}
+
+/**
+ * The area the floating window is laid out within.
+ *
+ * A fixed-position element lives inside its containing block, and a desktop shell
+ * may have moved that block below its command bar (or narrowed it). The window's
+ * inline `left`/`top` are written in that block's coordinate space, so both the
+ * drag origin and the clamp bounds must come from it rather than from the window
+ * object — otherwise a moved block would displace the window on every drag.
+ *
+ * The caller passes an inert probe that spans the block (`position: fixed;
+ * inset: 0`), so the measurement is exact and independent of how the shell
+ * implements its frame. An unmeasured or missing probe — a plain page, or the
+ * `body` the fallback mount appends to — falls back to the visual viewport, which
+ * is what this window has always used.
+ * @param probe - the probe element spanning the containing block.
+ * @param viewport - the `window`, used only for the fallback size.
+ * @returns `{ x, y, width, height }` in client coordinates.
+ */
+export function overlaySpace(probe, viewport) {
+  const rect = typeof probe?.getBoundingClientRect === 'function' ? probe.getBoundingClientRect() : undefined
+  if (rect !== undefined
+    && Number.isFinite(rect.left) && Number.isFinite(rect.top)
+    && rect.width > 0 && rect.height > 0) {
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+  }
+  return {
+    x: 0,
+    y: 0,
+    width: Number.isFinite(viewport?.innerWidth) ? viewport.innerWidth : 0,
+    height: Number.isFinite(viewport?.innerHeight) ? viewport.innerHeight : 0,
+  }
+}
+
+/**
+ * The default top of the unmoved window: the reserved chrome that the shell has
+ * **not** already consumed.
+ *
+ * This subtraction is the whole point of the desktop adaptation. A shell that
+ * owns the frame either reserves nothing and overlays its chrome (so the inset
+ * comes straight from the frame variable), or moves the content viewport below
+ * the chrome and publishes no variable (so the frame already reserved it and only
+ * the small default gap remains). Compensating for a boundary twice would push
+ * the window tens of pixels away from the top for no reason.
+ * @param inset - the reserved inset from {@link readFrameInset}.
+ * @param box - the space from {@link overlaySpace}.
+ * @param min - the gap kept when nothing is reserved.
+ * @returns the top offset in the window's own coordinate space.
+ */
+export function overlayTopFor(inset, box, min = OVERLAY_MIN_TOP) {
+  const reserved = Number.isFinite(box?.y) ? box.y : 0
+  const chrome = Number.isFinite(inset) ? inset : 0
+  return Math.max(min, Math.round(chrome - reserved))
+}
+
+/**
+ * The window's origin in the coordinate space its inline `left`/`top` are written
+ * in. A measured rect is in client coordinates, while the style offsets are
+ * relative to the containing block, so the two must be converted before a drag
+ * delta is added — otherwise an offset containing block would move the window by
+ * that offset on every drag.
+ * @param rect - the window's `getBoundingClientRect()`.
+ * @param box - the space from {@link overlaySpace}.
+ * @returns `{ x, y }` in the window's own coordinate space.
+ */
+export function dragOrigin(rect, box) {
+  return {
+    x: (Number.isFinite(rect?.left) ? rect.left : 0) - (Number.isFinite(box?.x) ? box.x : 0),
+    y: (Number.isFinite(rect?.top) ? rect.top : 0) - (Number.isFinite(box?.y) ? box.y : 0),
+  }
+}
 
 /** Parse a stored position. Anything malformed yields undefined ("not moved yet"). */
 export function parsePosition(raw) {
@@ -411,23 +517,28 @@ function safeJson(text) {
  * @param size - `{ width, height }` of the window itself.
  * @param margin - gap kept from the right/bottom edges.
  * @param minVisible - pixels of the window that must remain on screen.
+ * @param minY - smallest allowed top: the band a desktop shell's window chrome
+ * occupies must stay clear, and it is 0 wherever no chrome is reserved.
  * @returns a clamped `{ x, y }`.
  */
-export function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE) {
+export function clampPosition(position, viewport, size, margin = POSITION_MARGIN, minVisible = POSITION_MIN_VISIBLE, minY = 0) {
   const x = Number.isFinite(position?.x) ? position.x : 0
   const y = Number.isFinite(position?.y) ? position.y : 0
   const viewWidth = Number.isFinite(viewport?.width) ? viewport.width : undefined
   const viewHeight = Number.isFinite(viewport?.height) ? viewport.height : undefined
   const ownWidth = Number.isFinite(size?.width) ? size.width : 0
   const ownHeight = Number.isFinite(size?.height) ? size.height : 0
+  const floor = Number.isFinite(minY) ? Math.max(0, minY) : 0
   const minX = -(ownWidth - minVisible)
   const maxX = viewWidth === undefined ? x : Math.max(minX, viewWidth - minVisible - margin)
-  const maxY = viewHeight === undefined ? y : Math.max(0, viewHeight - minVisible - margin)
+  // The chrome floor wins over the bottom edge: in a window too short for both,
+  // pushing the window back up into the chrome would be the worse outcome.
+  const maxY = viewHeight === undefined ? y : Math.max(floor, viewHeight - minVisible - margin)
   // An unmeasured window (no size at all) cannot be reasoned about: the
   // "keep `minVisible` pixels on screen" rule would snap a zero-width window to
   // exactly `minVisible`, moving it for no reason. Leave it where it is.
   if (viewWidth === undefined || viewHeight === undefined || ownWidth <= 0 || ownHeight <= 0) return { x, y }
-  return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, 0), maxY) }
+  return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, floor), maxY) }
 }
 
 /** Read the stored position, treating an unusable storage as "not moved yet". */

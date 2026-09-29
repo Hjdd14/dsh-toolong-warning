@@ -90,7 +90,8 @@
 
 - dsh `>= 0.1.7-rc.1`（`@deepseek-ai/dsh`）
 - 安装者侧 Node `>= 22.19`（测试用到现代内置模块）
-- `web` profile（本插件带浏览器半，其它界面下是空操作）
+- 带浏览器客户端的 profile：网页端是 `web`，桌面端是 Electron 应用的 `desktop`
+  （本插件带浏览器半，没有浏览器客户端的界面下是空操作）
 
 ### 1. 从 npm 安装
 
@@ -130,17 +131,30 @@ dsh plugin --profile web add "link:<克隆目录的绝对路径>"
     }
   },
   "dependencies": {
-    "@hjdd14/dsh-toolong-warning": "^0.2.0"
+    "@hjdd14/dsh-toolong-warning": "^0.3.0"
   }
 }
 ```
 
 然后在 `<DSH_HOME>/profiles/web` 里执行 `pnpm install`，再重启 `dsh web`。
 
+### 5. 桌面端（Electron 应用）
+
+DSH 桌面端是同一套安装上的另一个界面：它有自己的 profile（`desktop`），跑的是同一套 Web UI，
+只是由应用自己的来源提供。它消费的客户端插件平台就是 `platform: "web"` —— 本包声明的正是这个 ——
+所以 **manifest 一个字都不用改**，只要把包装进桌面 profile：
+
+1. 打开桌面应用，在它的 **Plugins** 页里添加 `@hjdd14/dsh-toolong-warning`。
+2. 或者手工：把包同时加进 `<DSH_HOME>/profiles/desktop/package.json` 的
+   `dsh.profile.bundles` 与 `dependencies`，在该目录执行 `pnpm install`，重启应用。
+
+`dsh plugin --profile desktop add …` 是被**刻意拒绝**的：应用自有的 profile 由应用内建的插件管理器写入，
+而不是 CLI。悬浮窗知道窗口 chrome 归外壳所有 —— 见[桌面端摆放](#桌面端摆放)。
+
 ### 安装打包好的 tgz
 
 ```powershell
-npm pack                       # 生成 hjdd14-dsh-toolong-warning-0.2.0.tgz
+npm pack                       # 生成 hjdd14-dsh-toolong-warning-0.3.0.tgz
 dsh plugin --profile web add "file:<tgz 的绝对路径>"
 ```
 
@@ -181,6 +195,23 @@ DSH 自带的全局语言开关在**设置 → 通用**里。
 直接拖动悬浮窗即可；位置存在本浏览器里，与语言选择、阈值本地覆盖同一层次，**刻意不做成 profile 配置项**
 —— 它描述的是某个人屏幕的摆放，而不是这段对话本身。窗口始终留在视口内（视口变化、或警告卡片把窗口撑高
 之后会被拉回来）；只要移动过一次，这个分区里就会出现「复位悬浮窗位置」一行。
+
+### 桌面端摆放
+
+桌面外壳拥有窗口 chrome，悬浮窗对此有感知：
+
+- **外壳占用的那条带永远不算可用空间。** 悬浮窗的默认顶部、以及拖动时能到达的最小顶部，都来自外壳自己
+  发布的 `--dsh-frame-overlay-top`，再减去它已经通过「把内容视口下移」消化掉的那部分。因此「chrome 盖在
+  内容上」和「内容被移到 chrome 下方」两种外壳各自都会得到正确数值，且都不会被补偿两次。普通浏览器页面
+  不发布这个变量，所以每一个数值都与原来一致。
+- **夹取所依据的空间是量出来的，不是猜出来的。** 内容视口落在命令栏下方的那种外壳，如果按窗口尺寸夹取，
+  既会误判可用空间、也会让窗口每拖一次就偏移一点；一个横跨包含块的空探针把这块空间精确量出来。在浏览器
+  页面上，探针量到的就是视口本身，所以网页端行为不变。
+- **它不参与外壳的 app-region 计算**，窗口自身的拖拽条因此不会被插件层悄悄取消（macOS 与 Windows 的
+  Electron 都会给文档打标记；普通页面从不打，所以这两条规则在网页端是空操作）。
+
+一个值得知道的后果：浏览器存储按 origin 隔离，所以桌面应用与 `http://127.0.0.1:3080` 页面各自保留**独立**
+的语言选择、窗口位置与浏览器本地阈值覆盖。这一点在适配前就是如此，本次改动没有改变它。
 
 ### 两种生效范围，以及原因
 
@@ -259,7 +290,7 @@ dsh 只对客户端 bundle 热重载。这个版本号存在的意义，就是�
 | | |
 |---|---|
 | dsh | `>= 0.1.7-rc.1` |
-| 界面 | `web` profile（其它界面下浏览器半是空操作） |
+| 界面 | `web` profile，以及桌面应用的 `desktop` profile（其它界面下浏览器半是空操作） |
 | 可选 | `@deepseek-ai/dsh-session-query` —— 启用历史源。缺失时宿主没加载的会话就是测不了（等同旧行为） |
 | 宿主依赖 | `@deepseek-ai/schemastery` `~3.18.4`，设置表单需要。注意 profile 里可解析的裸包 `schemastery` 是 3.18.0，**没有** `.volatile()`，会让表单静默不可用 |
 

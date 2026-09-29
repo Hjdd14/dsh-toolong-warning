@@ -98,7 +98,8 @@ warning at all, because it had never been compacted (`gate: "compactions"`).
 
 - dsh `>= 0.1.7-rc.1` (`@deepseek-ai/dsh`)
 - Node `>= 22.19`
-- The `web` profile (this plugin has a browser half; it is a no-op on other surfaces)
+- A profile with a browser client: `web`, or `desktop` for the Electron app (this plugin
+  has a browser half; it is a no-op on surfaces without one)
 
 ### 1. From npm
 
@@ -139,17 +140,35 @@ In `<DSH_HOME>/profiles/web/package.json`:
     }
   },
   "dependencies": {
-    "@hjdd14/dsh-toolong-warning": "^0.2.0"
+    "@hjdd14/dsh-toolong-warning": "^0.3.0"
   }
 }
 ```
 
 Then run `pnpm install` inside `<DSH_HOME>/profiles/web` and restart `dsh web`.
 
+### 5. Desktop (the Electron app)
+
+The DSH Desktop app is another surface over the same installation, with its own profile
+(`desktop`) and the same Web UI served from the app's own origin. It consumes client
+plugins that declare `platform: "web"` — which is exactly what this package declares —
+so **nothing about the manifest changes**; the package is simply installed into the
+desktop profile:
+
+1. Open the app and add `@hjdd14/dsh-toolong-warning` from its **Plugins** page.
+2. Or by hand: add the package to `<DSH_HOME>/profiles/desktop/package.json` under both
+   `dsh.profile.bundles` and `dependencies`, run `pnpm install` in that directory, then
+   restart the app.
+
+`dsh plugin --profile desktop add …` is refused on purpose: an application-owned profile
+is written through the app's own in-process plugin manager rather than the CLI. The
+floating window knows the shell owns the window chrome — see
+[Desktop placement](#desktop-placement).
+
 ### Install a prebuilt tarball
 
 ```powershell
-npm pack                       # produces hjdd14-dsh-toolong-warning-0.2.0.tgz
+npm pack                       # produces hjdd14-dsh-toolong-warning-0.3.0.tgz
 dsh plugin --profile web add "file:<path to the tgz>"
 ```
 
@@ -195,6 +214,27 @@ choice and the threshold override, and is deliberately **not** a profile setting
 person's screen, not the conversation. It stays inside the viewport (a moved window is pulled back
 after a resize or when the warning card makes it taller), and a **Reset window position** row appears
 in this section as soon as the window has been moved.
+
+### Desktop placement
+
+A desktop shell owns the window chrome, and the floating window is aware of it:
+
+- **The shell's reserved band is never usable space.** The window's default top and the smallest top
+  it can be dragged to both come from the frame's own `--dsh-frame-overlay-top` variable, minus
+  whatever the shell has already reserved by moving its content viewport down. A shell that layers
+  its chrome over the content and one that moves the content below the chrome therefore each get the
+  right answer, and neither is compensated twice. On a plain browser page no such variable is
+  published, so every value stays what it was.
+- **The space it is clamped against is measured, not assumed.** A shell whose content viewport starts
+  below its command bar would otherwise both mis-clamp the window and displace it a little on every
+  drag; an inert probe spanning the containing block measures it exactly. On a browser page the probe
+  measures the viewport itself, so the Web behaviour is unchanged.
+- **It stays out of the shell's app-region computation**, so the window's own drag strips keep working
+  (macOS and Windows Electron both mark the document; a plain page never does).
+
+One consequence worth knowing: browser storage is per origin, so the desktop app and a page at
+`http://127.0.0.1:3080` keep **separate** language choices, window positions and browser-local
+threshold overrides. That was already true before this adaptation and is not changed by it.
 
 ### Two scopes of edit — and why
 
@@ -284,7 +324,7 @@ which code it is serving, rather than that being a matter of inference.
 | | |
 |---|---|
 | dsh | `>= 0.1.7-rc.1` |
-| Surface | the `web` profile (the browser half is a no-op elsewhere) |
+| Surface | the `web` profile, and the Desktop app's `desktop` profile (the browser half is a no-op elsewhere) |
 | Optional | `@deepseek-ai/dsh-session-query` — enables the history source. Without it, sessions the host has not loaded simply stay unmeasured |
 | Host dependency | `@deepseek-ai/schemastery` `~3.18.4` for the Settings form. The bare `schemastery` reachable from a profile is 3.18.0 and has **no** `.volatile()`, which silently makes the form unavailable |
 
