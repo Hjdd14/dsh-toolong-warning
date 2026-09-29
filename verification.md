@@ -539,6 +539,49 @@ node -e "import('./src/i18n.js').then(({clampPosition,dragOrigin,overlayTopFor,P
 # 输出：pointer 850 88 | old 124 | new 88
 ```
 
+### 5.9 发布记录：0.3.0 已上 npm 与 GitHub
+
+**命令与结果**（本机执行，附可核对的证据）
+
+```powershell
+# 1) 发布闸门（prepublishOnly 会自动再跑一次）
+npm test                 # 98 / 133 / 49 / 98 / 129 = 507 passed, 0 failed
+node scripts/check-hygiene.mjs   # hygiene: clean (28 files)
+
+# 2) 提交 + 注释标签（沿用 v0.1.1 / v0.2.0 的注释标签风格）
+git commit -m "feat(desktop): keep the floating window out of the desktop window chrome"
+git tag -a v0.3.0 -m "v0.3.0: desktop window-chrome adaptation"
+
+# 3) 推送（HTTPS + Git Credential Manager）
+git push origin main      # a518377..69de270  main -> main
+git push origin v0.3.0    # [new tag] v0.3.0 -> v0.3.0
+
+# 4) 发布到 npm
+npm publish --access public
+# + @hjdd14/dsh-toolong-warning@0.3.0
+```
+
+**核对结果**
+
+| 项目 | 实际值 |
+|---|---|
+| 发布提交 | `main` = `69de270`（`git ls-remote origin main` 与本地一致） |
+| 标签 | `v0.3.0`（注释标签，`v0.3.0^{commit}` = `69de270`，已推送） |
+| npm dist-tag | `latest` = `0.3.0`；`versions` = 0.1.0, 0.1.1, 0.2.0, **0.3.0** |
+| 已发布产物 | `integrity sha512-N+U2Lh2YAWV7zZgaycLz2eFKc63XqFjqz7vXd0/eQj16hnz+RgRFcZGqlmx6JTYTapcjB9SGMZc1E3rqPtV+Wg==` |
+| 产物一致性 | 本地 `npm pack` 计算的 sha512 与 registry 上的 `integrity` **逐字符相同** ⇒ 上传的就是本仓库这棵树的产物 |
+| 产物内容 | 从 tgz 解出 `package/client.js`：命中 `--dsh-frame-overlay-top` 与 `data-dsh-part: 'probe'` ⇒ 发布的是适配版 bundle |
+| 发布 re包 | 根目录 `dsh-toolong-warning.zip` 已重新打包，条目与 `git ls-files` 的 **35 个文件完全一致**（无 `.git/`） |
+
+**过程中的两个坑（供下次发布参考）**
+
+- 本机默认 npm 缓存目录（`%LOCALAPPDATA%\npm-cache`）在受限沙箱下不可写，`npm` 命令需要把缓存与临时目录
+  指到工作区内：`$env:npm_config_cache`、`$env:TEMP`/`$env:TMP`。
+- 发布后 `registry.npmjs.org` 的 **packument 与 tarball 走 CDN 缓存**，一度仍显示 `latest = 0.2.0`。
+  判断"是否真的发布成功"不要只看 packument：`https://registry.npmjs.org/@hjdd14%2Fdsh-toolong-warning/0.3.0`
+  这个版本文档已存在、以及再次 `npm publish` 报 `You cannot publish over the previously published versions: 0.3.0`，
+  两者才是结论性证据（packument 约半分钟后跟上）。
+
 ---
 
 ## 6. 尚未验证 / 需要你确认的部分（诚实声明）
