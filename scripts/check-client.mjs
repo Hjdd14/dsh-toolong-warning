@@ -25,7 +25,10 @@ import { ensureProfileEnv } from './profile-env.mjs'
 
 // Must run before the plugin modules are imported: they resolve
 // `@deepseek-ai/schemastery` from the profile, which a plain shell does not name.
+// A missing profile is reported rather than asserted on: CI has none (its workflow
+// installs nothing on purpose), and the plugin is expected to work there.
 const profileDir = ensureProfileEnv()
+console.log(`  (profile for schema resolution: ${profileDir ?? 'none found — fallback path'})\n`)
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -204,7 +207,15 @@ section('index.js: host half exports')
   check('the resolver falls back to the default for a rejected number', resolved.config.compactCountMin, 3)
   check('and for a rejected type', resolved.config.statsIntervalMs, 15000)
   check('and reports the rejection', resolved.warnings.length >= 1, true)
-  check('profile used for schema resolution', typeof profileDir === 'string' && profileDir.length > 0, true)
+  // `ensureProfileEnv()` returns undefined wherever no profile is installed —
+  // including CI, which runs with no install step by design. Asserting that a
+  // profile *was* found therefore asserted the machine, not the plugin, and failed
+  // for every clean checkout. What the plugin owes is that the source it used is
+  // the same one the Loader sees and that it can say which it was; both are checked
+  // here, and the profile in effect was printed above.
+  const configModule = await import('../src/config.js')
+  check('exports the same descriptor the config module built', mod.Config === configModule.ConfigInfo, true)
+  check('and reports which schema source it used', typeof configModule.usesSchemastery, 'boolean')
 }
 
 section('index.js: the plugin body mounts')
@@ -334,10 +345,38 @@ section('client.js: the bundle actually runs')
   }
   // `globalThis` is the real global object, so defining these on it satisfies the
   // bare `window` / `document` identifiers the bundle uses.
+  //
+  // `navigator` is stubbed with a deliberately mixed list ending in an unsupported
+  // language, because the bundle's factory resolves its initial language from
+  // `navigator.languages` in order and falls back to Chinese. Without the stub that
+  // value comes from the host — this machine's Chinese locale on a developer's box,
+  // `en-US` on a GitHub runner — so the label assertion below used to read the
+  // machine's language and failed for every contributor whose locale differed.
+  // Stubbing it makes the expectation a statement about the plugin's documented
+  // fallback chain instead. The previous globals are restored at the end so this
+  // does not leak into anything else in the process.
+  const hadGlobals = {
+    window: Object.hasOwn(globalThis, 'window'),
+    document: Object.hasOwn(globalThis, 'document'),
+    navigator: Object.hasOwn(globalThis, 'navigator'),
+    previous: {
+      window: globalThis.window,
+      document: globalThis.document,
+      // `globalThis.navigator` is a getter-only accessor on modern Node, so it
+      // cannot be assigned; its whole property descriptor is kept instead, which is
+      // also what lets the original be restored exactly.
+      navigator: Object.getOwnPropertyDescriptor(globalThis, 'navigator'),
+    },
+  }
   const installGlobals = new Function('window', 'document', 'globalThis', 'return globalThis')
   const globalScope = installGlobals(undefined, undefined, globalThis)
   globalScope.window = fakeWindow
   globalScope.document = fakeDocument
+  Object.defineProperty(globalScope, 'navigator', {
+    value: { languages: ['zh-CN', 'de-DE', 'en-US'], language: 'zh-CN' },
+    configurable: true,
+    writable: true,
+  })
 
   await import(pathToFileURL(join(ROOT, 'client.js')).href)
 
@@ -367,39 +406,87 @@ section('client.js: the bundle actually runs')
   check('the factory returned a plugin object', typeof plugin?.apply, 'function')
   check('declaring its services', plugin.inject, ['slots', 'sessions', 'configForms'])
 
-  const injected = []
-  const effects = []
-  let sectionLabel
-  // A minimal settings surface, so the settings section actually mounts and its
-  // registration can be inspected. Without it the plugin correctly skips that
-  // half, and this test would prove nothing about it.
-  const fakeForm = {
-    getSnapshot: () => ({ status: 'ready', writable: true, value: {}, revision: 0 }),
-    subscribe: () => () => {},
-    set: async () => true,
+  // A minimal settings surface is supplied below, so the settings section actually
+  // mounts and its registration can be inspected. Without it the plugin correctly
+  // skips that half, and that test would prove nothing about it.
+  //
+  // One register-and-collect pass, parameterized only by what the browser reports
+  // as its language. The factory builds its language store per call, so running it
+  // twice is what proves the nav label is *driven* by that store rather than being
+  // the same string twice by coincidence — the failure this guards is the label
+  // being frozen while the dictionary is still correct.
+  const i18n = await import('../src/i18n.js')
+  async function registerSection(languages) {
+    Object.defineProperty(globalScope, 'navigator', { value: { languages }, configurable: true, writable: true })
+    const stylesBefore = styles.length
+    const injected = []
+    const effects = []
+    let label
+    const instance = registered.factory(sandboxRequire)
+    const form = {
+      getSnapshot: () => ({ status: 'ready', writable: true, value: {}, revision: 0 }),
+      subscribe: () => () => {},
+      set: async () => true,
+    }
+    await instance.apply({
+      get: (name) => (name === 'configForms' ? { get: () => form } : undefined),
+      on: () => {},
+      effect: (factory) => { effects.push(factory()) },
+      slots: {
+        inject(name, register) {
+          injected.push(name)
+          return register()
+        },
+        register(options) {
+          if (options.name === 'settings.section') label = options.label
+          return () => {}
+        },
+      },
+    })
+    return {
+      injected,
+      effects,
+      newStyles: styles.length - stylesBefore,
+      label: typeof label === 'function' ? label() : label,
+    }
   }
-  await plugin.apply({
-    get: (name) => (name === 'configForms' ? { get: () => fakeForm } : undefined),
-    on: () => {},
-    effect: (factory) => { effects.push(factory()) },
-    slots: {
-      inject(name, register) {
-        injected.push(name)
-        return register()
-      },
-      register(options) {
-        if (options.name === 'settings.section') sectionLabel = options.label
-        return () => {}
-      },
-    },
-  })
-  check('it requests the overlay seat', injected.includes('shell.overlay'), true)
-  check('it requests the settings seat', injected.includes('settings.section'), true)
-  check('it tags its stylesheet for HMR eviction', styles.length, 1)
-  check('and registers a disposer', effects.length >= 1, true)
+
+  const first = await registerSection(['zh-CN', 'de-DE', 'en-US'])
+  check('it requests the overlay seat', first.injected.includes('shell.overlay'), true)
+  check('it requests the settings seat', first.injected.includes('settings.section'), true)
+  check('it tags its stylesheet for HMR eviction', first.newStyles, 1)
+  check('and registers a disposer', first.effects.length >= 1, true)
   // The nav label is resolved at render time, which is what makes the row follow
-  // the language switch instead of freezing at mount.
-  check('the section label resolves through the dictionary', sectionLabel(), '长对话提醒')
+  // the language switch instead of freezing at mount. `zh` is what the stubbed
+  // navigator list resolves to, so this is now the plugin's answer rather than the
+  // machine's language.
+  check('the section label resolves through the dictionary', first.label, '长对话提醒')
+  check('and follows the browser language instead of being frozen',
+    (await registerSection(['en-US'])).label, 'Long-conversation reminder')
+
+  // The language chain itself, asserted directly on the module that defines it —
+  // no globals involved, so it holds on any host: an explicit choice wins, then the
+  // harness locale, then the first supported browser language, then Chinese.
+  check('an explicit choice wins over every signal',
+    i18n.resolveInitialLanguage('en', { getSnapshot: () => ({ active: 'zh' }) }, ['zh-CN']), 'en')
+  check('the harness locale is next',
+    i18n.resolveInitialLanguage(undefined, { getSnapshot: () => ({ active: 'en' }) }, ['zh-CN']), 'en')
+  check('an unsupported browser language is skipped, not fatal',
+    i18n.resolveInitialLanguage(undefined, undefined, ['de-DE', 'en-US']), 'en')
+  check('with no signal at all the plugin falls back to Chinese',
+    i18n.resolveInitialLanguage(undefined, undefined, undefined), 'zh')
+  check('the label is read from the dictionary, not hard-coded',
+    i18n.t('en', 'settings.title'), 'Long-conversation reminder')
+
+  for (const key of ['window', 'document', 'navigator']) {
+    if (!hadGlobals[key]) {
+      delete globalThis[key]
+    } else if (key === 'navigator') {
+      Object.defineProperty(globalThis, 'navigator', hadGlobals.previous.navigator)
+    } else {
+      globalThis[key] = hadGlobals.previous[key]
+    }
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

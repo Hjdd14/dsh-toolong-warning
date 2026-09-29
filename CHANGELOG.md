@@ -32,10 +32,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for the usual reason (the bundle cannot import a sibling module). Both the copy's
   source text and its constants are compared by `scripts/test-i18n.mjs`, so a fix
   applied to one copy cannot silently miss the other.
-- `npm test` is **441 assertions, 0 failures**: 98 in `test-detect.mjs`, 104 in
-  `test-i18n.mjs`, 49 in `test-coldread.mjs`, 98 in `test-routes.mjs` and 90 in
-  `check-client.mjs`. Three assertions in `check-client.mjs` were merged into the
-  schema-contract checks below, so that file's count is 90 rather than 91.
+- `npm test` is **446 assertions, 0 failures**: 98 in `test-detect.mjs`, 104 in
+  `test-i18n.mjs`, 49 in `test-coldread.mjs`, 98 in `test-routes.mjs` and 97 in
+  `check-client.mjs`. Three assertions in the schema section were merged into the
+  contract checks below and one locale-dependent assertion was replaced by six that
+  are not, so those counts moved by hand rather than by accident.
 
 ### Fixed
 
@@ -48,13 +49,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A rejected config no longer carries a `value`.** Under Standard Schema a failed
   validation reports `issues` alone; the fallback returned a partly repaired
   `value` beside them, which callers could mistake for a usable config.
-- **`scripts/check-client.mjs` no longer asserts that the real schemastery library
-  resolved.** That assertion tested the machine rather than the plugin and failed
-  wherever no profile was installed — including CI, which deliberately runs with no
-  install step, so all three `main` runs were red on it. It was also the only thing
-  hiding the two fallback defects above: the failing assertion came first, so the
-  descriptor's own shape stopped being checked. The suite now asserts the contract
-  both sources must satisfy and prints which source it used.
+- **The test suite no longer asserts anything about the machine it runs on.** Three
+  assertions did, and every one of them failed in CI while passing on a developer
+  box — which is how a red `main` went unnoticed through three runs:
+  - *the real schemastery library resolved* — false wherever no profile is
+    installed, and CI's workflow installs nothing on purpose. It also failed first,
+    hiding the two fallback defects above.
+  - *profile used for schema resolution* — same shape: it asserted that
+    `~/.dsh/profiles/web` exists.
+  - *the section label resolves through the dictionary* — the bundle picks its
+    initial language from `navigator.languages`, and the suite never stubbed
+    `navigator`, so on a Chinese developer machine the label was `长对话提醒` and on
+    an `en-US` runner it was `Long-conversation reminder`. Node's `navigator` is a
+    getter-only global, so it is now replaced with `Object.defineProperty` and
+    restored afterwards. The language chain itself — explicit choice, then the
+    harness locale, then the first supported browser language, then Chinese — is
+    asserted directly on `src/i18n.js`, where no globals are involved. That the label
+    is *driven* by the store rather than frozen is asserted by registering the
+    section twice under two browser languages and requiring two different labels;
+    replacing the label with a literal in `client.js` makes exactly that assertion
+    fail, which is how it was checked.
+  - The schema source and the profile in effect are now **printed** rather than
+    asserted, so a run still says which object it checked.
 
 ## [0.1.0] — 2026-09-24
 
