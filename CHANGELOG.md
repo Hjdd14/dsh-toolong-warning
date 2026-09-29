@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-09-29
 
 ### Added
 
@@ -71,6 +71,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     fail, which is how it was checked.
   - The schema source and the profile in effect are now **printed** rather than
     asserted, so a run still says which object it checked.
+
+## [0.1.1] — 2026-09-27
+
+Version-only bump: `package.json` moved from `0.1.0` to `0.1.1` so the npm tarball
+and the GitHub release (tag `v0.1.1`) carried a number that matched the code they ship.
+No behavioural change — the commit's only diff is the version field, so the code is
+identical to `0.1.0`.
 
 ## [0.1.0] — 2026-09-24
 

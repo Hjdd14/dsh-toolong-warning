@@ -139,7 +139,7 @@ In `<DSH_HOME>/profiles/web/package.json`:
     }
   },
   "dependencies": {
-    "@hjdd14/dsh-toolong-warning": "^0.1.0"
+    "@hjdd14/dsh-toolong-warning": "^0.2.0"
   }
 }
 ```
@@ -149,7 +149,7 @@ Then run `pnpm install` inside `<DSH_HOME>/profiles/web` and restart `dsh web`.
 ### Install a prebuilt tarball
 
 ```powershell
-npm pack                       # produces hjdd14-dsh-toolong-warning-0.1.0.tgz
+npm pack                       # produces hjdd14-dsh-toolong-warning-0.2.0.tgz
 dsh plugin --profile web add "file:<path to the tgz>"
 ```
 

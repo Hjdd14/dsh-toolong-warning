@@ -130,7 +130,7 @@ dsh plugin --profile web add "link:<克隆目录的绝对路径>"
     }
   },
   "dependencies": {
-    "@hjdd14/dsh-toolong-warning": "^0.1.0"
+    "@hjdd14/dsh-toolong-warning": "^0.2.0"
   }
 }
 ```
@@ -140,7 +140,7 @@ dsh plugin --profile web add "link:<克隆目录的绝对路径>"
 ### 安装打包好的 tgz
 
 ```powershell
-npm pack                       # 生成 hjdd14-dsh-toolong-warning-0.1.0.tgz
+npm pack                       # 生成 hjdd14-dsh-toolong-warning-0.2.0.tgz
 dsh plugin --profile web add "file:<tgz 的绝对路径>"
 ```
 
