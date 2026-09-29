@@ -146,9 +146,18 @@ async function loadSchemastery() {
   return undefined
 }
 
-/** Metadata a form renderer reads; mirrors what schemastery attaches. */
+/**
+ * Metadata a form renderer reads; mirrors what schemastery attaches.
+ *
+ * The key is `meta.volatile`, not a shorthand: `@deepseek-ai/dsh-settings`
+ * decides whether a field gets a live form by reading exactly that property
+ * (`volatileForm` in `dsh-settings/lib/types/schema.js`, and
+ * `schemastery`'s own `Schema.prototype.volatile` sets the same key). Any other
+ * spelling leaves the Settings form permanently blank — the fallback has to
+ * carry the real key, or it is not a fallback for this purpose at all.
+ */
 function metaOf(field) {
-  const meta = { vol: true }
+  const meta = { volatile: true }
   if (field.type === 'boolean') return { ...meta, ...(field.default === undefined ? {} : { default: field.default }) }
   const numeric = { ...meta }
   if (field.default !== undefined) numeric.default = field.default
@@ -206,7 +215,7 @@ function buildDescriptor() {
       }
       value[field.name] = supplied
     }
-    return issues.length > 0 ? { value, issues } : { value }
+    return issues.length > 0 ? { issues } : { value }
   }
   return {
     type: 'object',

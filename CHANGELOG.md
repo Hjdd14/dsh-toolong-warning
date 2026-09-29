@@ -19,6 +19,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   pulled back after a resize, a rotation, or the warning card making it taller.
 - The Settings section grows a **Reset window position** row as soon as the window
   has been moved, and only then.
+- **`screenshots.json`** beside `package.json`, declaring the window screenshot
+  (`docs/overlay.png`) for plugin-market storefronts. Screenshots are declared in
+  the plugin's own repository, so changing them later needs no pull request on
+  anyone else's repo.
 
 ### Notes
 
@@ -28,8 +32,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for the usual reason (the bundle cannot import a sibling module). Both the copy's
   source text and its constants are compared by `scripts/test-i18n.mjs`, so a fix
   applied to one copy cannot silently miss the other.
-- `npm test` is now **440 assertions** (was 374): 104 in `test-i18n.mjs` and 91 in
-  `check-client.mjs`.
+- `npm test` is **441 assertions, 0 failures**: 98 in `test-detect.mjs`, 104 in
+  `test-i18n.mjs`, 49 in `test-coldread.mjs`, 98 in `test-routes.mjs` and 90 in
+  `check-client.mjs`. Three assertions in `check-client.mjs` were merged into the
+  schema-contract checks below, so that file's count is 90 rather than 91.
+
+### Fixed
+
+- **The fallback config descriptor now carries `meta.volatile`, the key the
+  Settings form actually reads.** It previously set a `vol: true` shorthand, so on
+  a host where `@deepseek-ai/schemastery` was not resolvable — the case the
+  fallback exists for — `volatileForm` found no editable field and the plugin's
+  Settings section came up empty. `schemastery` itself sets `meta.volatile`, and
+  `@deepseek-ai/dsh-settings` reads exactly that name.
+- **A rejected config no longer carries a `value`.** Under Standard Schema a failed
+  validation reports `issues` alone; the fallback returned a partly repaired
+  `value` beside them, which callers could mistake for a usable config.
+- **`scripts/check-client.mjs` no longer asserts that the real schemastery library
+  resolved.** That assertion tested the machine rather than the plugin and failed
+  wherever no profile was installed — including CI, which deliberately runs with no
+  install step, so all three `main` runs were red on it. It was also the only thing
+  hiding the two fallback defects above: the failing assertion came first, so the
+  descriptor's own shape stopped being checked. The suite now asserts the contract
+  both sources must satisfy and prints which source it used.
 
 ## [0.1.0] — 2026-09-24
 

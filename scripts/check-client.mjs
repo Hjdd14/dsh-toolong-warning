@@ -156,9 +156,21 @@ section('index.js: host half exports')
   check('exports a Config descriptor', typeof mod.Config?.['~standard']?.validate, 'function')
 
   // The Settings page publishes a form only for an entry whose schema it can
-  // walk (`volatileForm`): toJSON(), dict, and meta.volatile per field. A schema
-  // missing any of those leaves the form permanently unavailable, which is
-  // exactly what happened before this schema was rewritten — so assert them.
+  // walk (`volatileForm`): toJSON(), dict, and meta.volatile per field — the last
+  // one read under exactly that name. A schema missing any of those leaves the
+  // form permanently unavailable, which is exactly what happened before this
+  // schema was rewritten — so assert them.
+  //
+  // These hold for *both* schema sources. The real library is preferred but not
+  // guaranteed: a plain shell with no profile installed beside it gets the
+  // fallback descriptor, and CI runs with no install step at all. Asserting
+  // `usesSchemastery === true` therefore tested the machine, not the plugin, and
+  // failed wherever no profile was present — which is the one environment this
+  // suite is guaranteed to run in. The path in use is reported instead, so a run
+  // still tells you which object it checked.
+  const { usesSchemastery } = await import('../src/config.js')
+  console.log(`  (schema source: ${usesSchemastery ? 'real @deepseek-ai/schemastery' : 'fallback descriptor'})`)
+
   const config = mod.Config
   check('the schema can serialize itself for the form', typeof config.toJSON, 'function')
   check('the schema exposes its fields', Object.keys(config.dict ?? {}).sort(), [
@@ -170,7 +182,6 @@ section('index.js: host half exports')
   check('numeric fields carry their max bound', config.dict.compactCountMin.meta.max, 20)
   check('numeric fields carry their step', config.dict.compactCountMin.meta.step, 1)
   check('the serialized schema is JSON-safe', typeof JSON.stringify(config.toJSON()), 'string')
-  check('the real schemastery library resolved', (await import('../src/config.js')).usesSchemastery, true)
 
   const validate = config['~standard'].validate
   const defaults = validate({})
@@ -180,7 +191,11 @@ section('index.js: host half exports')
 
   const rejected = validate({ compactCountMin: 999, occupancyPercentMin: -5 })
   check('out-of-range values are rejected, not kept', rejected.issues.length >= 1, true)
-  check('and the rejected field does not ride the value', plain(rejected.value?.compactCountMin) ?? 'absent', 'absent')
+  // Standard Schema: a failed validation reports issues and carries no `value` at
+  // all — not a partially repaired one. `schemastery` behaves this way, and the
+  // fallback descriptor has to agree, because callers branch on `issues` existing
+  // and a stray `value` beside them would read as a usable config.
+  check('and a rejected config rides no value', rejected.value === undefined, true)
 
   const badType = validate({ statsIntervalMs: 'soon' })
   check('a wrong type is rejected', badType.issues.length >= 1, true)
